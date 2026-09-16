@@ -95,8 +95,10 @@ document.getElementById('startButton').addEventListener('click', startGame); doc
 window.addEventListener('resize', () => { if (!game.running) resizeCanvas(); });
 function handleKeyDown(event) { if (event.code === 'ArrowLeft') { keys.left = true; event.preventDefault(); } if (event.code === 'ArrowRight') { keys.right = true; event.preventDefault(); } if (event.code === 'KeyP') togglePause(); }
 function handleKeyUp(event) { if (event.code === 'ArrowLeft') keys.left = false; if (event.code === 'ArrowRight') keys.right = false; }
+function clearControls() { keys.left = false; keys.right = false; }
 document.addEventListener('keydown', handleKeyDown); document.addEventListener('keyup', handleKeyUp);
-window.addEventListener('blur', () => { keys.left = false; keys.right = false; });
-document.addEventListener('visibilitychange', () => { if (document.hidden) { keys.left = false; keys.right = false; } });
-canvas.addEventListener('pointerdown', event => { const midpoint = canvas.getBoundingClientRect().left + canvas.getBoundingClientRect().width / 2; if (event.clientX < midpoint) keys.left = true; else keys.right = true; }); window.addEventListener('pointerup', () => { keys.left = false; keys.right = false; });
+window.addEventListener('keyup', handleKeyUp); window.addEventListener('blur', clearControls); window.addEventListener('mouseleave', clearControls);
+document.addEventListener('visibilitychange', () => { if (document.hidden) clearControls(); });
+canvas.addEventListener('pointerdown', event => { if (event.pointerType === 'mouse') return; const midpoint = canvas.getBoundingClientRect().left + canvas.getBoundingClientRect().width / 2; if (event.clientX < midpoint) keys.left = true; else keys.right = true; });
+window.addEventListener('pointerup', clearControls); window.addEventListener('pointercancel', clearControls);
 resizeCanvas();
