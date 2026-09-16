@@ -27,6 +27,7 @@ function resizeCanvas() {
 }
 
 function resetGame() {
+  keys.left = false; keys.right = false;
   game.score = 0; game.altitude = 0; game.stickers = 0; game.cameraY = 0; game.lastTime = 0; game.paused = false;
   game.player = { x: game.width / 2 - 17, y: game.height - 88, width: 34, height: 43, velocityY: 0, velocityX: 0, rotation: 0 };
   game.platforms = [{ x: game.width / 2 - 62, y: game.height - 45, width: 124, height: 11, type: 'base' }];
@@ -95,5 +96,7 @@ window.addEventListener('resize', () => { if (!game.running) resizeCanvas(); });
 function handleKeyDown(event) { if (event.code === 'ArrowLeft') { keys.left = true; event.preventDefault(); } if (event.code === 'ArrowRight') { keys.right = true; event.preventDefault(); } if (event.code === 'KeyP') togglePause(); }
 function handleKeyUp(event) { if (event.code === 'ArrowLeft') keys.left = false; if (event.code === 'ArrowRight') keys.right = false; }
 document.addEventListener('keydown', handleKeyDown); document.addEventListener('keyup', handleKeyUp);
+window.addEventListener('blur', () => { keys.left = false; keys.right = false; });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { keys.left = false; keys.right = false; } });
 canvas.addEventListener('pointerdown', event => { const midpoint = canvas.getBoundingClientRect().left + canvas.getBoundingClientRect().width / 2; if (event.clientX < midpoint) keys.left = true; else keys.right = true; }); window.addEventListener('pointerup', () => { keys.left = false; keys.right = false; });
 resizeCanvas();
