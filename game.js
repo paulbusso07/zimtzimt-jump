@@ -63,6 +63,21 @@ platformImage.src = 'palteforme.jpeg';
 const keys = { left: false, right: false };
 const keyboardKeys = { left: false, right: false };
 const touchPointers = new Map();
+const PHYSICS = {
+  gravity: 1320,
+  jumpVelocity: -790,
+  horizontalAcceleration: 1850,
+  maxHorizontalSpeed: 430,
+  horizontalFriction: .88
+};
+const PLATFORM_CONFIG = {
+  minVerticalGap: 78,
+  maxVerticalGap: 118,
+  minWidth: 66,
+  maxWidth: 112,
+  keepAboveScreen: 1.35,
+  removeBelowScreen: 140
+};
 const game = { running: false, paused: false, lastTime: 0, score: 0, altitude: 0, stickers: 0, cameraY: 0, platforms: [], collectibles: [], particles: [], stars: [], player: null, width: 0, height: 0, audio: null };
 const bestScoreKey = 'zimtzimt-jump-best';
 const bestScoreEl = document.getElementById('bestScore');
@@ -83,29 +98,65 @@ function resizeCanvas() {
 function resetGame() {
   clearControls();
   game.score = 0; game.altitude = 0; game.stickers = 0; game.cameraY = 0; game.lastTime = 0; game.paused = false;
-  game.player = { x: game.width / 2 - 17, y: game.height - 88, width: 34, height: 43, velocityY: 0, velocityX: 0, rotation: 0, squashTimer: 0 };
-  game.platforms = [{ x: game.width / 2 - 62, y: game.height - 45, width: 124, height: 11, type: 'base' }];
+  const basePlatform = { x: game.width / 2 - 62, y: game.height - 45, width: 124, height: 11, type: 'base', pulse: 0 };
+  game.player = { x: game.width / 2 - 17, y: basePlatform.y - 43, width: 34, height: 43, velocityY: PHYSICS.jumpVelocity, velocityX: 0, rotation: 0, squashTimer: 0 };
+  game.platforms = [basePlatform];
   game.collectibles = []; game.particles = [];
-  let y = game.height - 165;
-  for (let index = 0; index < 28; index += 1) {
-    addPlatform(y, index);
-    if (index % 4 === 1) addPlatform(y, index + 35);
-    y -= 76 + Math.random() * 34;
-  }
+  generatePlatforms();
   updateHud();
 }
 
-function addPlatform(y, index) {
-  const difficulty = Math.min(game.altitude / 900, 1);
-  const width = 72 - difficulty * 20 + Math.random() * (53 - difficulty * 25);
+function getDifficulty() { return Math.min(game.altitude / 1800, 1); }
+function getPlatformWidth() { const difficulty = getDifficulty(); return PLATFORM_CONFIG.minWidth - difficulty * 8 + Math.random() * (PLATFORM_CONFIG.maxWidth - PLATFORM_CONFIG.minWidth - difficulty * 18); }
+function getVerticalGap() { const difficulty = getDifficulty(); return PLATFORM_CONFIG.minVerticalGap + difficulty * 8 + Math.random() * (PLATFORM_CONFIG.maxVerticalGap - PLATFORM_CONFIG.minVerticalGap + difficulty * 10); }
+function getLandingTime(verticalGap) {
+  const jumpSpeed = Math.abs(PHYSICS.jumpVelocity);
+  const discriminant = Math.max(0, jumpSpeed * jumpSpeed - 2 * PHYSICS.gravity * verticalGap);
+  return (jumpSpeed + Math.sqrt(discriminant)) / PHYSICS.gravity;
+}
+function wrappedDistance(first, second) {
+  const distance = Math.abs(first - second);
+  return Math.min(distance, game.width - distance);
+}
+function isReachable(from, x, y, width) {
+  const verticalGap = from.y - y;
+  if (verticalGap < 0 || verticalGap > Math.abs(PHYSICS.jumpVelocity) ** 2 / (2 * PHYSICS.gravity)) return false;
+  const landingTime = getLandingTime(verticalGap);
+  const horizontalReach = PHYSICS.maxHorizontalSpeed * landingTime + width / 2 + from.width / 2;
+  return wrappedDistance(from.x + from.width / 2, x + width / 2) <= horizontalReach;
+}
+function findPlatformX(from, y, width, forbidden) {
   const maxX = Math.max(18, game.width - width - 18);
-  const previous = game.platforms[game.platforms.length - 1];
-  let x = 18 + Math.random() * maxX;
-  if (previous) x = Math.max(12, Math.min(maxX, previous.x + (Math.random() - .5) * 260));
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const x = 18 + Math.random() * maxX;
+    const overlapsForbidden = forbidden && x < forbidden.x + forbidden.width + 18 && x + width + 18 > forbidden.x;
+    if (!overlapsForbidden && isReachable(from, x, y, width)) return x;
+  }
+  const reach = PHYSICS.maxHorizontalSpeed * getLandingTime(Math.max(0, from.y - y));
+  const direction = Math.random() < .5 ? -1 : 1;
+  return Math.max(18, Math.min(maxX, from.x + direction * Math.min(reach, game.width * .38)));
+}
+function addPlatform(y, index, from, forbidden) {
+  const width = getPlatformWidth();
+  const x = from ? findPlatformX(from, y, width, forbidden) : 18 + Math.random() * Math.max(18, game.width - width - 36);
   const types = ['classic', 'tech', 'jelly', 'organic', 'crystal', 'vegetal', 'ice', 'spring'];
   const type = index % 7 === 0 ? 'organic' : types[index % types.length];
   game.platforms.push({ x, y, width, height: 10, type, pulse: Math.random() * 6.28 });
   if (index > 1 && index % 4 === 0) game.collectibles.push({ x: x + width / 2, y: y - 28, collected: false, spin: Math.random() * 6.28, kind: index % 8 === 0 ? 'snow' : 'star' });
+  return game.platforms[game.platforms.length - 1];
+}
+function generatePlatforms() {
+  let anchor = game.platforms.reduce((highestPlatform, platform) => platform.y < highestPlatform.y ? platform : highestPlatform, game.platforms[0]);
+  let highest = anchor.y;
+  let index = 0;
+  while (highest > -game.height * PLATFORM_CONFIG.keepAboveScreen) {
+    const nextY = highest - getVerticalGap();
+    const primary = addPlatform(nextY, index, anchor);
+    if (index % 3 === 1 || Math.random() < .28) addPlatform(nextY, index + 1000, anchor, primary);
+    anchor = primary;
+    highest = nextY;
+    index += 1;
+  }
 }
 
 function startGame() {
@@ -120,25 +171,48 @@ function loop(timestamp) {
   update(delta); draw(); requestAnimationFrame(loop);
 }
 function update(delta) {
-  const player = game.player; const difficulty = Math.min(game.altitude / 900, 1); const horizontalSpeed = 650 + difficulty * 110;
+  const player = game.player;
   player.squashTimer = Math.max(0, player.squashTimer - delta);
   const movingLeft = keys.left === true;
   const movingRight = keys.right === true;
-  const horizontalDirection = movingLeft === movingRight ? 0 : movingLeft ? -1 : 1;
-  player.velocityX = horizontalDirection * horizontalSpeed;
-  player.x += player.velocityX * delta; player.x = (player.x + 5 + game.width + 10) % (game.width + 10) - 5; player.velocityY += 1580 * delta; const previousBottom = player.y + player.height; player.y += player.velocityY * delta;
-  if (player.velocityY > 0) game.platforms.forEach(platform => { if (previousBottom <= platform.y && player.y + player.height >= platform.y && player.x + player.width - 7 > platform.x && player.x + 7 < platform.x + platform.width) { player.y = platform.y - player.height; player.velocityY = -690; player.squashTimer = .16; player.rotation *= .5; burst(platform.x + platform.width / 2, platform.y, platform.type); playTone(320 + Math.random() * 70, .045); } });
-  const basePlatform = game.platforms.find(platform => platform.type === 'base');
-  if (basePlatform && player.velocityY > 0 && player.y + player.height >= basePlatform.y && player.x + player.width - 7 > basePlatform.x && player.x + 7 < basePlatform.x + basePlatform.width) { player.y = basePlatform.y - player.height; player.velocityY = -690; player.squashTimer = .16; }
-  if (player.y < game.height * .38) { const shift = game.height * .38 - player.y; player.y = game.height * .38; game.cameraY += shift; game.score += shift * .3; game.altitude += shift * .22; game.platforms.forEach(platform => { platform.y += shift; }); game.collectibles.forEach(item => { item.y += shift; }); }
-  game.platforms = game.platforms.filter(platform => platform.y < game.height + 30); while (game.platforms.length < 35) { const highest = Math.min(...game.platforms.map(platform => platform.y)); const gap = 76 + difficulty * 34 + Math.random() * (34 + difficulty * 10); const nextY = game.platforms.length % 4 === 0 ? highest : highest - gap; addPlatform(nextY, game.platforms.length); }
-  game.collectibles.forEach(item => { item.spin += delta * 4; if (!item.collected && Math.abs(player.x + player.width / 2 - item.x) < 24 && Math.abs(player.y + player.height / 2 - item.y) < 29) { item.collected = true; game.stickers += 1; burst(item.x, item.y, 'sticker'); showToast(item.kind === 'snow' ? 'ZINZIN CAPTÉ !' : 'STICKER CAPTÉ !'); playTone(600, .12); } });
-  game.collectibles = game.collectibles.filter(item => item.y < game.height + 30 && !item.collected); game.particles.forEach(particle => { particle.x += particle.vx * delta; particle.y += particle.vy * delta; particle.life -= delta; particle.vy += 80 * delta; }); game.particles = game.particles.filter(particle => particle.life > 0);
-  player.rotation += player.velocityX * delta * .002;
-  if (player.y > game.height + 60) {
-    if (game.altitude < 200) { player.y = game.height - 88; player.velocityY = -690; }
-    else endGame();
+  const inputDirection = movingLeft === movingRight ? 0 : movingLeft ? -1 : 1;
+  if (inputDirection) player.velocityX += inputDirection * PHYSICS.horizontalAcceleration * delta;
+  else player.velocityX *= Math.pow(PHYSICS.horizontalFriction, delta * 60);
+  player.velocityX = Math.max(-PHYSICS.maxHorizontalSpeed, Math.min(PHYSICS.maxHorizontalSpeed, player.velocityX));
+  player.x += player.velocityX * delta;
+  if (player.x + player.width < 0) player.x = game.width;
+  if (player.x > game.width) player.x = -player.width;
+  const previousBottom = player.y + player.height;
+  player.velocityY += PHYSICS.gravity * delta;
+  player.y += player.velocityY * delta;
+  let landedPlatform = null;
+  if (player.velocityY > 0) {
+    landedPlatform = game.platforms.find(platform => previousBottom <= platform.y && player.y + player.height >= platform.y && player.x + player.width - 7 > platform.x && player.x + 7 < platform.x + platform.width);
   }
+  if (landedPlatform) {
+    player.y = landedPlatform.y - player.height;
+    player.velocityY = PHYSICS.jumpVelocity;
+    player.squashTimer = .16;
+    player.rotation *= .5;
+    burst(landedPlatform.x + landedPlatform.width / 2, landedPlatform.y, landedPlatform.type);
+    playTone(320 + Math.random() * 70, .045);
+  }
+  if (player.y < game.height * .45) {
+    const shift = game.height * .45 - player.y;
+    player.y = game.height * .45;
+    game.cameraY += shift;
+    game.score += shift * .3;
+    game.altitude += shift * .22;
+    game.platforms.forEach(platform => { platform.y += shift; });
+    game.collectibles.forEach(item => { item.y += shift; });
+  }
+  game.platforms = game.platforms.filter(platform => platform.y < game.height + PLATFORM_CONFIG.removeBelowScreen);
+  game.collectibles = game.collectibles.filter(item => item.y < game.height + PLATFORM_CONFIG.removeBelowScreen && !item.collected);
+  generatePlatforms();
+  game.collectibles.forEach(item => { item.spin += delta * 4; if (!item.collected && Math.abs(player.x + player.width / 2 - item.x) < 24 && Math.abs(player.y + player.height / 2 - item.y) < 29) { item.collected = true; game.stickers += 1; burst(item.x, item.y, 'sticker'); showToast(item.kind === 'snow' ? 'ZINZIN CAPTÉ !' : 'STICKER CAPTÉ !'); playTone(600, .12); } });
+  game.particles.forEach(particle => { particle.x += particle.vx * delta; particle.y += particle.vy * delta; particle.life -= delta; particle.vy += 80 * delta; }); game.particles = game.particles.filter(particle => particle.life > 0);
+  player.rotation += player.velocityX * delta * .002;
+  if (player.y > game.height + 120) endGame();
   updateHud();
 }
 function updateHud() { document.getElementById('score').textContent = String(Math.floor(game.score)).padStart(5, '0'); document.getElementById('altitude').textContent = Math.floor(game.altitude); document.getElementById('stickerCount').textContent = game.stickers; document.getElementById('missionProgress').textContent = `${Math.min(game.stickers, 3)}/3`; document.getElementById('missionBar').style.width = `${Math.min(game.stickers / 3 * 100, 100)}%`; document.getElementById('altitudeBar').style.transform = `scaleX(${Math.min(game.altitude / 900, 1)})`; }
