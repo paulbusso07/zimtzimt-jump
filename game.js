@@ -60,6 +60,23 @@ platformImage.onload = () => {
   platformSprite.getContext('2d').drawImage(sourceCanvas, minX, minY, platformSprite.width, platformSprite.height, 0, 0, platformSprite.width, platformSprite.height);
 };
 platformImage.src = 'palteforme.jpeg';
+const specialPlatformImage = new Image();
+const specialPlatformSprites = {};
+specialPlatformImage.onload = () => {
+  const crops = {
+    normal: [.07, .08, .25, .14], moving: [.39, .08, .28, .14], movingVertical: [.73, .07, .22, .16],
+    breakable: [.08, .41, .25, .15], disappearing: [.4, .42, .28, .15], small: [.78, .42, .15, .13],
+    bouncy: [.23, .72, .18, .18], trampoline: [.62, .72, .22, .18]
+  };
+  Object.entries(crops).forEach(([type, [x, y, width, height]]) => {
+    const sprite = document.createElement('canvas');
+    sprite.width = Math.floor(specialPlatformImage.naturalWidth * width);
+    sprite.height = Math.floor(specialPlatformImage.naturalHeight * height);
+    sprite.getContext('2d').drawImage(specialPlatformImage, Math.floor(specialPlatformImage.naturalWidth * x), Math.floor(specialPlatformImage.naturalHeight * y), sprite.width, sprite.height, 0, 0, sprite.width, sprite.height);
+    specialPlatformSprites[type] = sprite;
+  });
+};
+specialPlatformImage.src = 'plateformespeciales.png';
 const keys = { left: false, right: false };
 const keyboardKeys = { left: false, right: false };
 const touchPointers = new Map();
@@ -77,6 +94,34 @@ const PLATFORM_CONFIG = {
   maxWidth: 112,
   keepAboveScreen: 1.35,
   removeBelowScreen: 140
+};
+const PLATFORM_TYPES = {
+  NORMAL: 'normal',
+  MOVING: 'moving',
+  MOVING_VERTICAL: 'movingVertical',
+  BREAKABLE: 'breakable',
+  BOUNCY: 'bouncy',
+  DISAPPEARING: 'disappearing',
+  SMALL: 'small',
+  TRAMPOLINE: 'trampoline'
+};
+const PLATFORM_SPAWN_CHANCES = {
+  normal: .58,
+  moving: .12,
+  movingVertical: .05,
+  breakable: .07,
+  bouncy: .06,
+  disappearing: .05,
+  small: .04,
+  trampoline: .03
+};
+const SPECIAL_PLATFORM_CONFIG = {
+  moving: { speed: 82 },
+  movingVertical: { speed: 42, amplitude: 34 },
+  breakable: { breakDelay: .36 },
+  bouncy: { jumpVelocity: -1080 },
+  trampoline: { jumpVelocity: -1250, disappearDelay: .28 },
+  disappearing: { disappearDelay: .48 }
 };
 const game = { running: false, paused: false, lastTime: 0, score: 0, altitude: 0, stickers: 0, cameraY: 0, platforms: [], collectibles: [], particles: [], stars: [], player: null, width: 0, height: 0, audio: null };
 const bestScoreKey = 'zimtzimt-jump-best';
@@ -136,14 +181,32 @@ function findPlatformX(from, y, width, forbidden) {
   const direction = Math.random() < .5 ? -1 : 1;
   return Math.max(18, Math.min(maxX, from.x + direction * Math.min(reach, game.width * .38)));
 }
-function addPlatform(y, index, from, forbidden) {
-  const width = getPlatformWidth();
+function choosePlatformType(forceNormal = false) {
+  if (forceNormal || game.altitude < 120) return PLATFORM_TYPES.NORMAL;
+  const progression = Math.min(1, (game.altitude - 120) / 2200);
+  const specialEntries = Object.entries(PLATFORM_SPAWN_CHANCES).filter(([type]) => type !== PLATFORM_TYPES.NORMAL);
+  const specialTotal = specialEntries.reduce((sum, [, chance]) => sum + chance * progression, 0);
+  let roll = Math.random() * (PLATFORM_SPAWN_CHANCES.normal + specialTotal);
+  if (roll < PLATFORM_SPAWN_CHANCES.normal) return PLATFORM_TYPES.NORMAL;
+  roll -= PLATFORM_SPAWN_CHANCES.normal;
+  for (const [type, chance] of specialEntries) {
+    const adjustedChance = chance * progression;
+    if (roll < adjustedChance) return type;
+    roll -= adjustedChance;
+  }
+  return PLATFORM_TYPES.NORMAL;
+}
+function addPlatform(y, index, from, forbidden, forceNormal = false) {
+  let width = getPlatformWidth();
+  const type = choosePlatformType(forceNormal);
+  if (type === PLATFORM_TYPES.SMALL) width *= .68;
   const x = from ? findPlatformX(from, y, width, forbidden) : 18 + Math.random() * Math.max(18, game.width - width - 36);
-  const types = ['classic', 'tech', 'jelly', 'organic', 'crystal', 'vegetal', 'ice', 'spring'];
-  const type = index % 7 === 0 ? 'organic' : types[index % types.length];
-  game.platforms.push({ x, y, width, height: 10, type, pulse: Math.random() * 6.28 });
+  const platform = { x, y, width, height: 10, type, pulse: Math.random() * 6.28, velocityX: 0, velocityY: 0, baseY: y, active: true, destroyed: false, breakTimer: 0 };
+  if (type === PLATFORM_TYPES.MOVING) platform.velocityX = (Math.random() < .5 ? -1 : 1) * SPECIAL_PLATFORM_CONFIG.moving.speed;
+  if (type === PLATFORM_TYPES.MOVING_VERTICAL) platform.velocityY = (Math.random() < .5 ? -1 : 1) * SPECIAL_PLATFORM_CONFIG.movingVertical.speed;
+  game.platforms.push(platform);
   if (index > 1 && index % 4 === 0) game.collectibles.push({ x: x + width / 2, y: y - 28, collected: false, spin: Math.random() * 6.28, kind: index % 8 === 0 ? 'snow' : 'star' });
-  return game.platforms[game.platforms.length - 1];
+  return platform;
 }
 function generatePlatforms() {
   let anchor = game.platforms.reduce((highestPlatform, platform) => platform.y < highestPlatform.y ? platform : highestPlatform, game.platforms[0]);
@@ -151,7 +214,7 @@ function generatePlatforms() {
   let index = 0;
   while (highest > -game.height * PLATFORM_CONFIG.keepAboveScreen) {
     const nextY = highest - getVerticalGap();
-    const primary = addPlatform(nextY, index, anchor);
+    const primary = addPlatform(nextY, index, anchor, null, true);
     if (index % 3 === 1 || Math.random() < .28) addPlatform(nextY, index + 1000, anchor, primary);
     anchor = primary;
     highest = nextY;
@@ -170,8 +233,36 @@ function loop(timestamp) {
   const delta = Math.min((timestamp - (game.lastTime || timestamp)) / 1000, .035); game.lastTime = timestamp;
   update(delta); draw(); requestAnimationFrame(loop);
 }
+function updateSpecialPlatforms(delta) {
+  game.platforms.forEach(platform => {
+    if (platform.type === PLATFORM_TYPES.MOVING) {
+      platform.x += platform.velocityX * delta;
+      if (platform.x <= 18 || platform.x + platform.width >= game.width - 18) { platform.x = Math.max(18, Math.min(game.width - 18 - platform.width, platform.x)); platform.velocityX *= -1; }
+    }
+    if (platform.type === PLATFORM_TYPES.MOVING_VERTICAL) {
+      platform.y += platform.velocityY * delta;
+      if (platform.y <= platform.baseY - SPECIAL_PLATFORM_CONFIG.movingVertical.amplitude || platform.y >= platform.baseY + SPECIAL_PLATFORM_CONFIG.movingVertical.amplitude) { platform.y = Math.max(platform.baseY - SPECIAL_PLATFORM_CONFIG.movingVertical.amplitude, Math.min(platform.baseY + SPECIAL_PLATFORM_CONFIG.movingVertical.amplitude, platform.y)); platform.velocityY *= -1; }
+    }
+    if (platform.breakTimer > 0) { platform.breakTimer -= delta; if (platform.breakTimer <= 0) platform.destroyed = true; }
+  });
+}
+function handlePlatformLanding(platform) {
+  const player = game.player;
+  if (!platform.active || platform.destroyed) return;
+  player.y = platform.y - player.height;
+  if (platform.type === PLATFORM_TYPES.BOUNCY) player.velocityY = SPECIAL_PLATFORM_CONFIG.bouncy.jumpVelocity;
+  else if (platform.type === PLATFORM_TYPES.TRAMPOLINE) { player.velocityY = SPECIAL_PLATFORM_CONFIG.trampoline.jumpVelocity; platform.active = false; platform.breakTimer = SPECIAL_PLATFORM_CONFIG.trampoline.disappearDelay; }
+  else player.velocityY = PHYSICS.jumpVelocity;
+  if (platform.type === PLATFORM_TYPES.BREAKABLE) platform.breakTimer = SPECIAL_PLATFORM_CONFIG.breakable.breakDelay;
+  if (platform.type === PLATFORM_TYPES.DISAPPEARING) { platform.active = false; platform.breakTimer = SPECIAL_PLATFORM_CONFIG.disappearing.disappearDelay; }
+  player.squashTimer = .16;
+  player.rotation *= .5;
+  burst(platform.x + platform.width / 2, platform.y, platform.type);
+  playTone(platform.type === PLATFORM_TYPES.BOUNCY || platform.type === PLATFORM_TYPES.TRAMPOLINE ? 520 : 320 + Math.random() * 70, .06);
+}
 function update(delta) {
   const player = game.player;
+  updateSpecialPlatforms(delta);
   player.squashTimer = Math.max(0, player.squashTimer - delta);
   const movingLeft = keys.left === true;
   const movingRight = keys.right === true;
@@ -187,15 +278,10 @@ function update(delta) {
   player.y += player.velocityY * delta;
   let landedPlatform = null;
   if (player.velocityY > 0) {
-    landedPlatform = game.platforms.find(platform => previousBottom <= platform.y && player.y + player.height >= platform.y && player.x + player.width - 7 > platform.x && player.x + 7 < platform.x + platform.width);
+    landedPlatform = game.platforms.find(platform => platform.active && !platform.destroyed && previousBottom <= platform.y && player.y + player.height >= platform.y && player.x + player.width - 7 > platform.x && player.x + 7 < platform.x + platform.width);
   }
   if (landedPlatform) {
-    player.y = landedPlatform.y - player.height;
-    player.velocityY = PHYSICS.jumpVelocity;
-    player.squashTimer = .16;
-    player.rotation *= .5;
-    burst(landedPlatform.x + landedPlatform.width / 2, landedPlatform.y, landedPlatform.type);
-    playTone(320 + Math.random() * 70, .045);
+    handlePlatformLanding(landedPlatform);
   }
   if (player.y < game.height * .45) {
     const shift = game.height * .45 - player.y;
@@ -203,10 +289,10 @@ function update(delta) {
     game.cameraY += shift;
     game.score += shift * .3;
     game.altitude += shift * .22;
-    game.platforms.forEach(platform => { platform.y += shift; });
+    game.platforms.forEach(platform => { platform.y += shift; if (platform.type === PLATFORM_TYPES.MOVING_VERTICAL) platform.baseY += shift; });
     game.collectibles.forEach(item => { item.y += shift; });
   }
-  game.platforms = game.platforms.filter(platform => platform.y < game.height + PLATFORM_CONFIG.removeBelowScreen);
+  game.platforms = game.platforms.filter(platform => !platform.destroyed && platform.y < game.height + PLATFORM_CONFIG.removeBelowScreen);
   game.collectibles = game.collectibles.filter(item => item.y < game.height + PLATFORM_CONFIG.removeBelowScreen && !item.collected);
   generatePlatforms();
   game.collectibles.forEach(item => { item.spin += delta * 4; if (!item.collected && Math.abs(player.x + player.width / 2 - item.x) < 24 && Math.abs(player.y + player.height / 2 - item.y) < 29) { item.collected = true; game.stickers += 1; burst(item.x, item.y, 'sticker'); showToast(item.kind === 'snow' ? 'ZINZIN CAPTÉ !' : 'STICKER CAPTÉ !'); playTone(600, .12); } });
@@ -223,6 +309,18 @@ function draw() { context.clearRect(0, 0, game.width, game.height); drawBackgrou
 function drawBackground() { const gradient = context.createLinearGradient(0, 0, 0, game.height); gradient.addColorStop(0, '#18253b'); gradient.addColorStop(1, '#10141d'); context.fillStyle = gradient; context.fillRect(0, 0, game.width, game.height); game.stars.forEach(star => { const y = (star.y + game.cameraY * .08) % game.height; context.globalAlpha = star.alpha; context.fillStyle = star.size > 1 ? '#d8f546' : '#f1eee5'; context.fillRect(star.x, y, star.size, star.size); }); context.globalAlpha = 1; for (let index = 0; index < 4; index += 1) { context.strokeStyle = index === 0 ? 'rgba(110,233,219,.11)' : 'rgba(241,238,229,.045)'; context.lineWidth = index === 0 ? 2 : 1; context.beginPath(); context.arc(game.width * .86, game.height * .25, 80 + index * 23, 0, Math.PI * 2); context.stroke(); } }
 function drawPlatform(platform) {
   const { x, y, width } = platform;
+  const specialSprite = platform.type !== PLATFORM_TYPES.NORMAL && platform.type !== 'base' ? specialPlatformSprites[platform.type] : null;
+  if (specialSprite) {
+    const platformVisualHeight = width * specialSprite.height / specialSprite.width * .7;
+    context.save();
+    context.globalAlpha = platform.active ? (platform.breakTimer > 0 ? .45 + Math.abs(Math.sin(platform.breakTimer * 22)) * .55 : 1) : .35;
+    context.drawImage(specialSprite, x, y - 2, width, platformVisualHeight);
+    if (platform.type === PLATFORM_TYPES.BREAKABLE && platform.breakTimer > 0) {
+      context.strokeStyle = '#10141d'; context.lineWidth = 2; context.beginPath(); context.moveTo(x + width * .3, y + 2); context.lineTo(x + width * .42, y + 9); context.lineTo(x + width * .55, y + 3); context.lineTo(x + width * .7, y + 10); context.stroke();
+    }
+    context.restore();
+    return;
+  }
   if (platformSprite) {
     context.save();
     context.globalAlpha = .98;
