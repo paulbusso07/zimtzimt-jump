@@ -8,6 +8,27 @@ const hud = document.getElementById('hud');
 const toast = document.getElementById('toast');
 const playerImage = new Image();
 playerImage.src = 'https://zimtzimt.com/assets/logos/logo_allos.webp';
+const platformImage = new Image();
+let platformSprite = null;
+platformImage.onload = () => {
+  const sourceCanvas = document.createElement('canvas');
+  const sourceContext = sourceCanvas.getContext('2d');
+  sourceCanvas.width = platformImage.naturalWidth;
+  sourceCanvas.height = platformImage.naturalHeight;
+  sourceContext.drawImage(platformImage, 0, 0);
+  const imageData = sourceContext.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+  let minX = sourceCanvas.width; let minY = sourceCanvas.height; let maxX = 0; let maxY = 0;
+  for (let index = 0; index < imageData.data.length; index += 4) {
+    const red = imageData.data[index]; const green = imageData.data[index + 1]; const blue = imageData.data[index + 2];
+    if (red > 235 && green > 235 && blue > 235) imageData.data[index + 3] = 0;
+    else { const pixel = index / 4; const x = pixel % sourceCanvas.width; const y = Math.floor(pixel / sourceCanvas.width); minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); }
+  }
+  sourceContext.putImageData(imageData, 0, 0);
+  platformSprite = document.createElement('canvas');
+  platformSprite.width = maxX - minX + 1; platformSprite.height = maxY - minY + 1;
+  platformSprite.getContext('2d').drawImage(sourceCanvas, minX, minY, platformSprite.width, platformSprite.height, 0, 0, platformSprite.width, platformSprite.height);
+};
+platformImage.src = 'palteforme.jpeg';
 const keys = { left: false, right: false };
 const keyboardKeys = { left: false, right: false };
 const touchPointers = new Map();
@@ -44,7 +65,8 @@ function resetGame() {
 }
 
 function addPlatform(y, index) {
-  const width = 72 + Math.random() * 53;
+  const difficulty = Math.min(game.altitude / 900, 1);
+  const width = 72 - difficulty * 20 + Math.random() * (53 - difficulty * 25);
   const maxX = Math.max(18, game.width - width - 18);
   const previous = game.platforms[game.platforms.length - 1];
   let x = 18 + Math.random() * maxX;
@@ -67,7 +89,7 @@ function loop(timestamp) {
   update(delta); draw(); requestAnimationFrame(loop);
 }
 function update(delta) {
-  const player = game.player; const horizontalSpeed = 650;
+  const player = game.player; const difficulty = Math.min(game.altitude / 900, 1); const horizontalSpeed = 650 + difficulty * 110;
   const movingLeft = keys.left === true;
   const movingRight = keys.right === true;
   const horizontalDirection = movingLeft === movingRight ? 0 : movingLeft ? -1 : 1;
@@ -77,7 +99,7 @@ function update(delta) {
   const basePlatform = game.platforms.find(platform => platform.type === 'base');
   if (basePlatform && player.velocityY > 0 && player.y + player.height >= basePlatform.y && player.x + player.width - 7 > basePlatform.x && player.x + 7 < basePlatform.x + basePlatform.width) { player.y = basePlatform.y - player.height; player.velocityY = -690; }
   if (player.y < game.height * .38) { const shift = game.height * .38 - player.y; player.y = game.height * .38; game.cameraY += shift; game.score += shift * .3; game.altitude += shift * .22; game.platforms.forEach(platform => { platform.y += shift; }); game.collectibles.forEach(item => { item.y += shift; }); }
-  game.platforms = game.platforms.filter(platform => platform.y < game.height + 30); while (game.platforms.length < 35) { const highest = Math.min(...game.platforms.map(platform => platform.y)); const nextY = game.platforms.length % 4 === 0 ? highest : highest - 76 - Math.random() * 34; addPlatform(nextY, game.platforms.length); }
+  game.platforms = game.platforms.filter(platform => platform.y < game.height + 30); while (game.platforms.length < 35) { const highest = Math.min(...game.platforms.map(platform => platform.y)); const gap = 76 + difficulty * 34 + Math.random() * (34 + difficulty * 10); const nextY = game.platforms.length % 4 === 0 ? highest : highest - gap; addPlatform(nextY, game.platforms.length); }
   game.collectibles.forEach(item => { item.spin += delta * 4; if (!item.collected && Math.abs(player.x + player.width / 2 - item.x) < 24 && Math.abs(player.y + player.height / 2 - item.y) < 29) { item.collected = true; game.stickers += 1; burst(item.x, item.y, 'sticker'); showToast(item.kind === 'snow' ? 'ZINZIN CAPTÉ !' : 'STICKER CAPTÉ !'); playTone(600, .12); } });
   game.collectibles = game.collectibles.filter(item => item.y < game.height + 30 && !item.collected); game.particles.forEach(particle => { particle.x += particle.vx * delta; particle.y += particle.vy * delta; particle.life -= delta; particle.vy += 80 * delta; }); game.particles = game.particles.filter(particle => particle.life > 0);
   player.rotation += player.velocityX * delta * .002;
@@ -95,6 +117,13 @@ function draw() { context.clearRect(0, 0, game.width, game.height); drawBackgrou
 function drawBackground() { const gradient = context.createLinearGradient(0, 0, 0, game.height); gradient.addColorStop(0, '#18253b'); gradient.addColorStop(1, '#10141d'); context.fillStyle = gradient; context.fillRect(0, 0, game.width, game.height); game.stars.forEach(star => { const y = (star.y + game.cameraY * .08) % game.height; context.globalAlpha = star.alpha; context.fillStyle = star.size > 1 ? '#d8f546' : '#f1eee5'; context.fillRect(star.x, y, star.size, star.size); }); context.globalAlpha = 1; for (let index = 0; index < 4; index += 1) { context.strokeStyle = index === 0 ? 'rgba(110,233,219,.11)' : 'rgba(241,238,229,.045)'; context.lineWidth = index === 0 ? 2 : 1; context.beginPath(); context.arc(game.width * .86, game.height * .25, 80 + index * 23, 0, Math.PI * 2); context.stroke(); } }
 function drawPlatform(platform) {
   const { x, y, width } = platform;
+  if (platformSprite) {
+    context.save();
+    context.globalAlpha = .98;
+    context.drawImage(platformSprite, x, y - 2, width, width * platformSprite.height / platformSprite.width);
+    context.restore();
+    return;
+  }
   const colors = { classic: '#d8f546', tech: '#6ee9db', jelly: '#d66cff', organic: '#ff6654', crystal: '#b995ff', vegetal: '#55d68b', ice: '#8bdcff', spring: '#f1eee5' };
   const color = colors[platform.type] || colors.classic;
   context.save();
