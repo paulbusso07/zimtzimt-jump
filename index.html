@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#10141d" />
+  <title>Z'imtZ'imt Jump - Afterwork cosmique</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#game" aria-label="Z'imtZ'imt Jump accueil">
+        <img src="https://zimtzimt.com/assets/logos/logo_zimtzimt.webp" alt="Z'imtZ'imt" />
+        <span class="brand-divider"></span>
+        <span class="brand-product">JUMP<br><small>radio arcade</small></span>
+      </a>
+      <div class="signal"><span class="signal-dot"></span> SIGNAL CAPTE <b>97.3 FM</b></div>
+      <button class="icon-button" id="soundToggle" aria-label="Couper le son" title="Son">♫</button>
+    </header>
+
+    <main class="game-layout" id="game">
+      <aside class="side-panel left-panel">
+        <div class="panel-kicker">MESSAGE RADIO 01</div>
+        <h2>On monte<br><em>tout la-haut.</em></h2>
+        <p class="panel-copy">Le signal de la galaxie Z'imtZ'imt s'est perdu dans l'atmosphère. Aide Allos à le récupérer, plateforme après plateforme.</p>
+        <div class="mini-radio">
+          <div class="radio-header"><span class="eq"><i></i><i></i><i></i><i></i><i></i></span><span>TRANSMISSION LIVE</span></div>
+          <div class="radio-line"><span>ALLÔS FM</span><strong id="radioFrequency">97.3</strong></div>
+          <div class="ticker">... restez à l'écoute ... zinzin en approche ...</div>
+        </div>
+        <div class="sticker-wall" aria-label="Collection stickers">
+          <span class="sticker sticker-alien">👽</span><span class="sticker sticker-ufo">🛸</span><span class="sticker sticker-star">✦</span><span class="sticker sticker-snow">⛄</span>
+        </div>
+      </aside>
+
+      <section class="game-card" aria-label="Jeu Z'imtZ'imt Jump">
+        <div class="game-topline"><span class="live-label"><span></span> EN DIRECT DE LA GALAXIE</span><span class="best-score">BEST <b id="bestScore">00000</b></span></div>
+        <div class="canvas-wrap" id="canvasWrap">
+          <canvas id="gameCanvas" aria-label="Zone de jeu. Utilisez les fleches ou A et D pour bouger."></canvas>
+          <div class="scanlines"></div>
+          <div class="start-screen" id="startScreen">
+            <div class="start-orbit"><img src="https://zimtzimt.com/assets/logos/logo_allos.webp" alt="Allos alien" /></div>
+            <div class="eyebrow">EPISODE 01 / AFTERWORK</div>
+            <h1>Z'IMTZ'IMT<br><span>JUMP</span></h1>
+            <p>Le ciel est à toi, zinzin.</p>
+            <button class="primary-button" id="startButton"><span>▶</span> LANCER LE SIGNAL</button>
+            <div class="control-hint"><kbd>←</kbd><kbd>→</kbd> ou <kbd>A</kbd><kbd>D</kbd> pour piloter</div>
+          </div>
+          <div class="pause-screen hidden" id="pauseScreen"><div class="pause-mark">Ⅱ</div><span>PAUSE RADIO</span><small>Appuie sur P pour reprendre</small></div>
+          <div class="game-over hidden" id="gameOver"><div class="over-eyebrow">SIGNAL PERDU</div><h2>Retour sur<br><span>Terre.</span></h2><div class="final-score-label">SCORE DU VOL</div><div class="final-score" id="finalScore">00000</div><div class="over-stats"><span>ALTITUDE <b id="finalAltitude">0 m</b></span><span>STICKERS <b id="finalStickers">0</b></span></div><button class="primary-button" id="restartButton"><span>↻</span> RECONNECTER</button></div>
+          <div class="hud hidden" id="hud"><div class="hud-stat"><span>SCORE</span><strong id="score">00000</strong></div><div class="hud-stat altitude-stat"><span>ALTITUDE</span><strong><i id="altitudeBar"></i><b id="altitude">0</b> m</strong></div><div class="hud-stat"><span>STICKERS</span><strong id="stickerCount">0</strong></div><button class="pause-button" id="pauseButton" aria-label="Pause">Ⅱ</button></div>
+          <div class="toast hidden" id="toast">STICKER CAPTÉ !</div>
+        </div>
+        <div class="game-footer"><span><i class="controller-dot"></i> TOUCHE LES PLATEFORMES POUR MONTER</span><span>ZONE : <b>LA GALAXIE Z'IMTZ'IMT</b></span></div>
+      </section>
+
+      <aside class="side-panel right-panel">
+        <div class="panel-kicker">ZINZIN DE LA SEMAINE</div>
+        <div class="zinzin-card"><div class="zinzin-image"><img src="https://zimtzimt.com/assets/zinzin_mois/zinzin.webp" alt="Bonhomme de neige alien" /></div><div class="zinzin-info"><h3>Le Bonhomme</h3><p>Il nous a honoré le temps d'une soirée, malheureusement trop courte.</p><div class="zinzin-tags"><span>⛄</span><span>👽</span><span>❄</span></div></div></div>
+        <div class="mission"><div class="panel-kicker">MISSION DU SOIR</div><div class="mission-row"><span class="mission-icon">✦</span><span>Collecte <b>3 stickers</b></span><strong id="missionProgress">0/3</strong></div><div class="progress-track"><i id="missionBar"></i></div></div>
+        <div class="quote">“ On reçoit des signaux étranges provenant de la galaxie Z'imtZ'imt... ”<small>— Le standard</small></div>
+      </aside>
+    </main>
+    <footer class="site-footer"><span>© Z'IMTZ'IMT / RADIO COSMIQUE</span><span>COLLECTION N°001 — <b>STICKERS &amp; SOUVENIRS</b></span><span>MADE FOR THE AFTERWORK</span></footer>
+  </div>
+  <script src="game.js"></script>
+</body>
+</html>
