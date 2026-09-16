@@ -7,7 +7,38 @@ const pauseScreen = document.getElementById('pauseScreen');
 const hud = document.getElementById('hud');
 const toast = document.getElementById('toast');
 const playerImage = new Image();
-playerImage.src = 'https://zimtzimt.com/assets/logos/logo_allos.webp';
+let playerSprite = null;
+playerImage.onload = () => {
+  const sourceCanvas = document.createElement('canvas');
+  const sourceContext = sourceCanvas.getContext('2d');
+  const crop = { x: Math.floor(playerImage.naturalWidth * .25), y: Math.floor(playerImage.naturalHeight * .28), width: Math.floor(playerImage.naturalWidth * .58), height: Math.floor(playerImage.naturalHeight * .64) };
+  sourceCanvas.width = crop.width;
+  sourceCanvas.height = crop.height;
+  sourceContext.drawImage(playerImage, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.width, crop.height);
+  const imageData = sourceContext.getImageData(0, 0, crop.width, crop.height);
+  const foreground = new Uint8Array(crop.width * crop.height);
+  for (let index = 0; index < imageData.data.length; index += 4) {
+    const red = imageData.data[index]; const green = imageData.data[index + 1]; const blue = imageData.data[index + 2];
+    const pixel = index / 4; const x = pixel % crop.width + crop.x; const y = Math.floor(pixel / crop.width) + crop.y;
+    const brightest = Math.max(red, green, blue); const darkest = Math.min(red, green, blue);
+    const cordPixel = x < playerImage.naturalWidth * .4 && y < playerImage.naturalHeight * .72 && red > green * 1.15 && red > blue * 1.1;
+    const isBrightColor = !cordPixel && brightest > 48 && brightest - darkest > 24;
+    if (isBrightColor) foreground[pixel] = 1;
+    imageData.data[index + 3] = isBrightColor ? 255 : 0;
+  }
+  for (let index = 0; index < foreground.length; index += 1) {
+    if (foreground[index]) continue;
+    const x = index % crop.width; const y = Math.floor(index / crop.width); let nearForeground = false;
+    for (let offsetY = -3; offsetY <= 3 && !nearForeground; offsetY += 1) for (let offsetX = -3; offsetX <= 3; offsetX += 1) {
+      const neighborX = x + offsetX; const neighborY = y + offsetY;
+      if (neighborX >= 0 && neighborX < crop.width && neighborY >= 0 && neighborY < crop.height && foreground[neighborY * crop.width + neighborX]) { nearForeground = true; break; }
+    }
+    if (nearForeground) imageData.data[index * 4 + 3] = 255;
+  }
+  sourceContext.putImageData(imageData, 0, 0);
+  playerSprite = sourceCanvas;
+};
+playerImage.src = 'zinzin2.jpeg';
 const platformImage = new Image();
 let platformSprite = null;
 platformImage.onload = () => {
@@ -52,7 +83,7 @@ function resizeCanvas() {
 function resetGame() {
   clearControls();
   game.score = 0; game.altitude = 0; game.stickers = 0; game.cameraY = 0; game.lastTime = 0; game.paused = false;
-  game.player = { x: game.width / 2 - 17, y: game.height - 88, width: 34, height: 43, velocityY: 0, velocityX: 0, rotation: 0 };
+  game.player = { x: game.width / 2 - 17, y: game.height - 88, width: 34, height: 43, velocityY: 0, velocityX: 0, rotation: 0, squashTimer: 0 };
   game.platforms = [{ x: game.width / 2 - 62, y: game.height - 45, width: 124, height: 11, type: 'base' }];
   game.collectibles = []; game.particles = [];
   let y = game.height - 165;
@@ -90,14 +121,15 @@ function loop(timestamp) {
 }
 function update(delta) {
   const player = game.player; const difficulty = Math.min(game.altitude / 900, 1); const horizontalSpeed = 650 + difficulty * 110;
+  player.squashTimer = Math.max(0, player.squashTimer - delta);
   const movingLeft = keys.left === true;
   const movingRight = keys.right === true;
   const horizontalDirection = movingLeft === movingRight ? 0 : movingLeft ? -1 : 1;
   player.velocityX = horizontalDirection * horizontalSpeed;
   player.x += player.velocityX * delta; player.x = (player.x + 5 + game.width + 10) % (game.width + 10) - 5; player.velocityY += 1580 * delta; const previousBottom = player.y + player.height; player.y += player.velocityY * delta;
-  if (player.velocityY > 0) game.platforms.forEach(platform => { if (previousBottom <= platform.y && player.y + player.height >= platform.y && player.x + player.width - 7 > platform.x && player.x + 7 < platform.x + platform.width) { player.y = platform.y - player.height; player.velocityY = -690; player.rotation *= .5; burst(platform.x + platform.width / 2, platform.y, platform.type); playTone(320 + Math.random() * 70, .045); } });
+  if (player.velocityY > 0) game.platforms.forEach(platform => { if (previousBottom <= platform.y && player.y + player.height >= platform.y && player.x + player.width - 7 > platform.x && player.x + 7 < platform.x + platform.width) { player.y = platform.y - player.height; player.velocityY = -690; player.squashTimer = .16; player.rotation *= .5; burst(platform.x + platform.width / 2, platform.y, platform.type); playTone(320 + Math.random() * 70, .045); } });
   const basePlatform = game.platforms.find(platform => platform.type === 'base');
-  if (basePlatform && player.velocityY > 0 && player.y + player.height >= basePlatform.y && player.x + player.width - 7 > basePlatform.x && player.x + 7 < basePlatform.x + basePlatform.width) { player.y = basePlatform.y - player.height; player.velocityY = -690; }
+  if (basePlatform && player.velocityY > 0 && player.y + player.height >= basePlatform.y && player.x + player.width - 7 > basePlatform.x && player.x + 7 < basePlatform.x + basePlatform.width) { player.y = basePlatform.y - player.height; player.velocityY = -690; player.squashTimer = .16; }
   if (player.y < game.height * .38) { const shift = game.height * .38 - player.y; player.y = game.height * .38; game.cameraY += shift; game.score += shift * .3; game.altitude += shift * .22; game.platforms.forEach(platform => { platform.y += shift; }); game.collectibles.forEach(item => { item.y += shift; }); }
   game.platforms = game.platforms.filter(platform => platform.y < game.height + 30); while (game.platforms.length < 35) { const highest = Math.min(...game.platforms.map(platform => platform.y)); const gap = 76 + difficulty * 34 + Math.random() * (34 + difficulty * 10); const nextY = game.platforms.length % 4 === 0 ? highest : highest - gap; addPlatform(nextY, game.platforms.length); }
   game.collectibles.forEach(item => { item.spin += delta * 4; if (!item.collected && Math.abs(player.x + player.width / 2 - item.x) < 24 && Math.abs(player.y + player.height / 2 - item.y) < 29) { item.collected = true; game.stickers += 1; burst(item.x, item.y, 'sticker'); showToast(item.kind === 'snow' ? 'ZINZIN CAPTÉ !' : 'STICKER CAPTÉ !'); playTone(600, .12); } });
@@ -120,7 +152,8 @@ function drawPlatform(platform) {
   if (platformSprite) {
     context.save();
     context.globalAlpha = .98;
-    context.drawImage(platformSprite, x, y - 2, width, width * platformSprite.height / platformSprite.width);
+    const platformVisualHeight = width * platformSprite.height / platformSprite.width * .7;
+    context.drawImage(platformSprite, x, y - 2, width, platformVisualHeight);
     context.restore();
     return;
   }
@@ -161,7 +194,7 @@ function drawPlatform(platform) {
   context.restore();
 }
 function drawCollectible(item) { const scale = .75 + Math.abs(Math.sin(item.spin)) * .25; context.save(); context.translate(item.x, item.y); context.rotate(item.spin * .25); context.scale(scale, scale); context.fillStyle = item.kind === 'snow' ? '#d9c7ff' : '#d8f546'; context.beginPath(); for (let index = 0; index < 8; index += 1) { const radius = index % 2 ? 5 : 13; const angle = -Math.PI / 2 + index * Math.PI / 4; context.lineTo(Math.cos(angle) * radius, Math.sin(angle) * radius); } context.closePath(); context.fill(); context.fillStyle = '#10141d'; context.font = '12px sans-serif'; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(item.kind === 'snow' ? '⛄' : '✦', 0, 1); context.restore(); }
-function drawPlayer() { const player = game.player; context.save(); context.translate(player.x + player.width / 2, player.y + player.height / 2); context.rotate(player.rotation); context.fillStyle = 'rgba(0,0,0,.3)'; context.beginPath(); context.ellipse(0, 23, 19, 4, 0, 0, Math.PI * 2); context.fill(); if (playerImage.complete && playerImage.naturalWidth > 0) { context.drawImage(playerImage, -25, -29, 50, 58); } else { context.fillStyle = '#d8f546'; context.beginPath(); context.ellipse(0, -2, 16, 18, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#10141d'; context.beginPath(); context.ellipse(0, 1, 13, 10, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#f1eee5'; context.beginPath(); context.arc(-5, -1, 2.5, 0, Math.PI * 2); context.arc(5, -1, 2.5, 0, Math.PI * 2); context.fill(); } context.restore(); }
+function drawPlayer() { const player = game.player; const squash = player.squashTimer > 0 ? player.squashTimer / .16 : 0; const scaleX = 1 + squash * .13; const scaleY = 1 - squash * .2; context.save(); context.translate(player.x + player.width / 2, player.y + player.height / 2); context.rotate(player.rotation); context.scale(scaleX, scaleY); context.fillStyle = 'rgba(0,0,0,.3)'; context.beginPath(); context.ellipse(0, 19, 13, 2.5, 0, 0, Math.PI * 2); context.fill(); if (playerSprite) { context.drawImage(playerSprite, -16, -18, 32, 36); } else { context.fillStyle = '#d8f546'; context.beginPath(); context.ellipse(0, -2, 16, 18, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#10141d'; context.beginPath(); context.ellipse(0, 1, 13, 10, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#f1eee5'; context.beginPath(); context.arc(-5, -1, 2.5, 0, Math.PI * 2); context.arc(5, -1, 2.5, 0, Math.PI * 2); context.fill(); } context.restore(); }
 function drawParticle(particle) { context.globalAlpha = Math.max(0, particle.life * 2); context.fillStyle = particle.color; context.fillRect(particle.x, particle.y, particle.size, particle.size); context.globalAlpha = 1; }
 
 function playTone(frequency, duration) { if (!document.getElementById('soundToggle').dataset.on) return; if (!game.audio) game.audio = new (window.AudioContext || window.webkitAudioContext)(); const oscillator = game.audio.createOscillator(); const gain = game.audio.createGain(); oscillator.frequency.value = frequency; oscillator.type = 'square'; gain.gain.setValueAtTime(.025, game.audio.currentTime); gain.gain.exponentialRampToValueAtTime(.001, game.audio.currentTime + duration); oscillator.connect(gain); gain.connect(game.audio.destination); oscillator.start(); oscillator.stop(game.audio.currentTime + duration); }
