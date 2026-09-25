@@ -80,6 +80,12 @@ specialPlatformImage.src = 'plateformespeciales.png';
 const keys = { left: false, right: false };
 const keyboardKeys = { left: false, right: false };
 const touchPointers = new Map();
+const tilt = { enabled: false, value: 0 };
+const TILT_CONFIG = {
+  deadZone: 2,
+  maxAngle: 22,
+  smoothing: .3
+};
 const PHYSICS = {
   gravity: 1320,
   jumpVelocity: -790,
@@ -223,6 +229,7 @@ function generatePlatforms() {
 }
 
 function startGame() {
+  requestTiltPermission();
   resizeCanvas(); resetGame(); game.running = true; startScreen.classList.add('hidden'); gameOverScreen.classList.add('hidden'); pauseScreen.classList.add('hidden'); hud.classList.remove('hidden'); canvas.focus(); requestAnimationFrame(loop); playTone(220, .08);
 }
 function endGame() { game.running = false; hud.classList.add('hidden'); gameOverScreen.classList.remove('hidden'); document.getElementById('finalScore').textContent = String(Math.floor(game.score)).padStart(5, '0'); document.getElementById('finalAltitude').textContent = `${Math.floor(game.altitude)} m`; document.getElementById('finalStickers').textContent = game.stickers; if (game.score > bestScore) { bestScore = Math.floor(game.score); localStorage.setItem(bestScoreKey, bestScore); bestScoreEl.textContent = String(bestScore).padStart(5, '0'); } playTone(110, .2); }
@@ -268,6 +275,7 @@ function update(delta) {
   const movingRight = keys.right === true;
   const inputDirection = movingLeft === movingRight ? 0 : movingLeft ? -1 : 1;
   if (inputDirection) player.velocityX += inputDirection * PHYSICS.horizontalAcceleration * delta;
+  else if (tilt.enabled) player.velocityX += (tilt.value * PHYSICS.maxHorizontalSpeed - player.velocityX) * Math.min(1, delta * 14);
   else player.velocityX *= Math.pow(PHYSICS.horizontalFriction, delta * 60);
   player.velocityX = Math.max(-PHYSICS.maxHorizontalSpeed, Math.min(PHYSICS.maxHorizontalSpeed, player.velocityX));
   player.x += player.velocityX * delta;
@@ -390,4 +398,34 @@ function releasePointer(event) { touchPointers.delete(event.pointerId); syncCont
 window.addEventListener('pointerup', releasePointer); window.addEventListener('pointercancel', releasePointer);
 canvas.addEventListener('pointerleave', event => { if (event.pointerType !== 'mouse') { touchPointers.delete(event.pointerId); syncControls(); } });
 canvas.addEventListener('lostpointercapture', releasePointer);
+function getScreenAngle() {
+  if (screen.orientation && typeof screen.orientation.angle === 'number') return screen.orientation.angle;
+  return typeof window.orientation === 'number' ? window.orientation : 0;
+}
+function handleOrientation(event) {
+  if (event.gamma === null || event.beta === null) return;
+  const screenAngle = (getScreenAngle() + 360) % 360;
+  let angle = event.gamma;
+  if (screenAngle === 90) angle = event.beta;
+  else if (screenAngle === 270) angle = -event.beta;
+  else if (screenAngle === 180) angle = -event.gamma;
+  const magnitude = Math.max(0, Math.abs(angle) - TILT_CONFIG.deadZone);
+  const target = Math.sign(angle) * Math.min(1, magnitude / (TILT_CONFIG.maxAngle - TILT_CONFIG.deadZone));
+  tilt.value += (target - tilt.value) * TILT_CONFIG.smoothing;
+  if (!tilt.enabled) { tilt.enabled = true; updateControlHint(); }
+}
+function listenToTilt() { window.removeEventListener('deviceorientation', handleOrientation); window.addEventListener('deviceorientation', handleOrientation); }
+function requestTiltPermission() {
+  if (typeof DeviceOrientationEvent === 'undefined') return;
+  if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+    DeviceOrientationEvent.requestPermission().then(state => { if (state === 'granted') listenToTilt(); }).catch(() => {});
+  } else listenToTilt();
+}
+function updateControlHint() {
+  const hint = document.querySelector('.control-hint');
+  if (tilt.enabled) hint.textContent = 'Incline ton téléphone pour piloter';
+  else if (matchMedia('(pointer: coarse)').matches) hint.textContent = 'Touche gauche / droite ou incline ton téléphone';
+}
+listenToTilt();
+updateControlHint();
 resizeCanvas();
