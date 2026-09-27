@@ -5,7 +5,6 @@ const startScreen = document.getElementById('startScreen');
 const gameOverScreen = document.getElementById('gameOver');
 const pauseScreen = document.getElementById('pauseScreen');
 const hud = document.getElementById('hud');
-const toast = document.getElementById('toast');
 const playerImage = new Image();
 let playerSprite = null;
 playerImage.onload = () => {
@@ -103,7 +102,7 @@ const PLATFORM_TYPES = {
   TRAMPOLINE: 'trampoline'
 };
 const PLATFORM_SPAWN_CHANCES = {
-  normal: .58,
+  normal: .42,
   moving: .12,
   movingVertical: .05,
   breakable: .07,
@@ -120,11 +119,127 @@ const SPECIAL_PLATFORM_CONFIG = {
   trampoline: { jumpVelocity: -1250, disappearDelay: .28 },
   disappearing: { disappearDelay: .48 }
 };
-const game = { running: false, paused: false, lastTime: 0, score: 0, altitude: 0, stickers: 0, cameraY: 0, platforms: [], collectibles: [], particles: [], stars: [], player: null, width: 0, height: 0, audio: null };
+const game = { running: false, paused: false, lastTime: 0, score: 0, altitude: 0, cameraY: 0, platforms: [], particles: [], stars: [], player: null, width: 0, height: 0, audio: null };
 const bestScoreKey = 'zimtzimt-jump-best';
 const bestScoreEl = document.getElementById('bestScore');
 let bestScore = Number(localStorage.getItem(bestScoreKey) || 0);
 bestScoreEl.textContent = String(bestScore).padStart(5, '0');
+// Shared leaderboard: Supabase project URL and publishable (anon) key, schema in supabase/scores.sql.
+// While either is empty, scores are only kept in this browser.
+const LEADERBOARD_CONFIG = { supabaseUrl: 'https://tenylbmbkcltasmjtzij.supabase.co', supabaseKey: 'sb_publishable_nVIbQbndLXEE6QgXdC7iCQ_AapxPT9a', table: 'scores', size: 10 };
+const LOCAL_SCORES_KEY = 'zimtzimt-jump-scores';
+const PLAYER_NAME_KEY = 'zimtzimt-jump-name';
+const leaderboardEl = document.getElementById('leaderboard');
+const leaderboardMiniEl = document.getElementById('leaderboardMini');
+const leaderboardNoteEl = document.getElementById('leaderboardNote');
+const scoreForm = document.getElementById('scoreForm');
+const playerNameInput = document.getElementById('playerName');
+const saveScoreButton = document.getElementById('saveScoreButton');
+const changeNameButton = document.getElementById('changeNameButton');
+const scoreStatus = document.getElementById('scoreStatus');
+let pendingScore = null;
+
+function isOnlineLeaderboard() { return Boolean(LEADERBOARD_CONFIG.supabaseUrl && LEADERBOARD_CONFIG.supabaseKey); }
+function supabaseHeaders(extra = {}) {
+  const headers = { apikey: LEADERBOARD_CONFIG.supabaseKey, ...extra };
+  // Legacy anon keys are JWTs and also go in Authorization; new publishable keys must not.
+  if (LEADERBOARD_CONFIG.supabaseKey.startsWith('eyJ')) headers.Authorization = `Bearer ${LEADERBOARD_CONFIG.supabaseKey}`;
+  return headers;
+}
+function normalizeName(name) { return name.trim().replace(/\s+/g, ' ').slice(0, 16); }
+function sameName(first, second) { return first.toLowerCase() === second.toLowerCase(); }
+function getPlayerName() { try { return localStorage.getItem(PLAYER_NAME_KEY) || ''; } catch { return ''; } }
+function setPlayerName(name) { try { localStorage.setItem(PLAYER_NAME_KEY, name); } catch {} }
+function readLocalScores() { try { return JSON.parse(localStorage.getItem(LOCAL_SCORES_KEY)) || []; } catch { return []; } }
+async function fetchTopScores() {
+  if (!isOnlineLeaderboard()) return readLocalScores().slice(0, LEADERBOARD_CONFIG.size);
+  const response = await fetch(`${LEADERBOARD_CONFIG.supabaseUrl}/rest/v1/${LEADERBOARD_CONFIG.table}?select=name,score&order=score.desc,created_at.asc&limit=${LEADERBOARD_CONFIG.size}`, { headers: supabaseHeaders() });
+  if (!response.ok) throw new Error(`Leaderboard HTTP ${response.status}`);
+  return response.json();
+}
+// Keeps one entry per player (case-insensitive name) holding their best score; resolves to that best score.
+async function saveScore(entry) {
+  if (!isOnlineLeaderboard()) {
+    const scores = readLocalScores();
+    const existing = scores.find(score => sameName(score.name, entry.name));
+    if (existing && existing.score >= entry.score) return existing.score;
+    const updated = [...scores.filter(score => score !== existing), entry].sort((first, second) => second.score - first.score).slice(0, 50);
+    localStorage.setItem(LOCAL_SCORES_KEY, JSON.stringify(updated));
+    return entry.score;
+  }
+  const response = await fetch(`${LEADERBOARD_CONFIG.supabaseUrl}/rest/v1/rpc/submit_score`, { method: 'POST', headers: supabaseHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ p_name: entry.name, p_score: entry.score, p_altitude: entry.altitude }) });
+  if (!response.ok) throw new Error(`Leaderboard HTTP ${response.status}`);
+  return response.json();
+}
+function leaderboardMessage(text) { const item = document.createElement('li'); item.className = 'leaderboard-empty'; item.textContent = text; return item; }
+function renderLeaderboard(entries) {
+  const playerName = getPlayerName();
+  const myIndex = playerName ? entries.findIndex(entry => sameName(entry.name, playerName)) : -1;
+  [leaderboardEl, leaderboardMiniEl].forEach(list => {
+    if (!entries.length) { list.replaceChildren(leaderboardMessage('Aucun score pour l’instant. À toi de jouer !')); return; }
+    list.replaceChildren(...entries.map((entry, index) => {
+      const item = document.createElement('li');
+      const name = document.createElement('span'); name.className = 'leaderboard-name'; name.textContent = entry.name;
+      const score = document.createElement('span'); score.className = 'leaderboard-score'; score.textContent = String(entry.score).padStart(5, '0');
+      item.append(name, score);
+      if (index === myIndex) item.classList.add('is-me');
+      return item;
+    }));
+  });
+  return myIndex;
+}
+async function refreshLeaderboard() {
+  try {
+    const myIndex = renderLeaderboard(await fetchTopScores());
+    leaderboardNoteEl.textContent = isOnlineLeaderboard() ? '' : 'Classement enregistré sur cet appareil uniquement.';
+    return myIndex;
+  } catch {
+    [leaderboardEl, leaderboardMiniEl].forEach(list => list.replaceChildren(leaderboardMessage('Classement indisponible pour le moment.')));
+    return -1;
+  }
+}
+function setScoreStatus(text, kind = '') { scoreStatus.textContent = text; scoreStatus.className = `score-status${kind ? ` is-${kind}` : ''}`; }
+function showNameForm(name) {
+  scoreForm.hidden = false;
+  changeNameButton.hidden = true;
+  saveScoreButton.disabled = false;
+  playerNameInput.value = name;
+  if (matchMedia('(pointer: fine)').matches) playerNameInput.focus();
+}
+async function submitPendingScore(name) {
+  if (!pendingScore) return;
+  scoreForm.hidden = true;
+  changeNameButton.hidden = true;
+  setScoreStatus('Envoi du signal…');
+  try {
+    const best = await saveScore({ name, ...pendingScore });
+    setPlayerName(name);
+    const myIndex = await refreshLeaderboard();
+    const rank = myIndex >= 0 ? ` · n°${myIndex + 1}` : '';
+    setScoreStatus(best > pendingScore.score ? `${name}, ton record reste ${String(best).padStart(5, '0')}${rank}` : `Record enregistré pour ${name}${rank} !`, 'success');
+    changeNameButton.hidden = false;
+  } catch {
+    showNameForm(name);
+    setScoreStatus('Impossible d’enregistrer le score. Réessaie.', 'error');
+  }
+}
+function openScoreForm() {
+  pendingScore = { score: Math.floor(game.score), altitude: Math.floor(game.altitude) };
+  setScoreStatus('');
+  const savedName = getPlayerName();
+  if (savedName) submitPendingScore(savedName);
+  else showNameForm('');
+}
+scoreForm.addEventListener('submit', event => {
+  event.preventDefault();
+  const name = normalizeName(playerNameInput.value);
+  if (!name) { setScoreStatus('Entre un nom pour enregistrer ton score.', 'error'); return; }
+  saveScoreButton.disabled = true;
+  submitPendingScore(name);
+});
+changeNameButton.addEventListener('click', () => { setScoreStatus(''); showNameForm(''); });
+refreshLeaderboard();
+setInterval(() => { if (!game.running) refreshLeaderboard(); }, 60000);
 
 function resizeCanvas() {
   const ratio = Math.min(window.devicePixelRatio || 1, 2);
@@ -139,11 +254,11 @@ function resizeCanvas() {
 
 function resetGame() {
   clearControls();
-  game.score = 0; game.altitude = 0; game.stickers = 0; game.cameraY = 0; game.lastTime = 0; game.paused = false;
+  game.score = 0; game.altitude = 0; game.cameraY = 0; game.lastTime = 0; game.paused = false;
   const basePlatform = { x: game.width / 2 - 62, y: game.height - 45, width: 124, height: 11, type: 'base', pulse: 0 };
   game.player = { x: game.width / 2 - 17, y: basePlatform.y - 43, width: 34, height: 43, velocityY: PHYSICS.jumpVelocity, velocityX: 0, rotation: 0, squashTimer: 0 };
   game.platforms = [basePlatform];
-  game.collectibles = []; game.particles = [];
+  game.particles = [];
   generatePlatforms();
   updateHud();
 }
@@ -178,10 +293,11 @@ function findPlatformX(from, y, width, forbidden) {
   const direction = Math.random() < .5 ? -1 : 1;
   return Math.max(18, Math.min(maxX, from.x + direction * Math.min(reach, game.width * .38)));
 }
-function choosePlatformType(forceNormal = false) {
-  if (forceNormal || game.altitude < 120) return PLATFORM_TYPES.NORMAL;
-  const progression = Math.min(1, (game.altitude - 120) / 2200);
-  const specialEntries = Object.entries(PLATFORM_SPAWN_CHANCES).filter(([type]) => type !== PLATFORM_TYPES.NORMAL);
+function choosePlatformType(onMainPath = false) {
+  if (game.altitude < 30) return PLATFORM_TYPES.NORMAL;
+  const progression = .4 + .6 * Math.min(1, (game.altitude - 30) / 700);
+  // Horizontal movers could drift out of reach, so they never carry the guaranteed path.
+  const specialEntries = Object.entries(PLATFORM_SPAWN_CHANCES).filter(([type]) => type !== PLATFORM_TYPES.NORMAL && !(onMainPath && type === PLATFORM_TYPES.MOVING));
   const specialTotal = specialEntries.reduce((sum, [, chance]) => sum + chance * progression, 0);
   let roll = Math.random() * (PLATFORM_SPAWN_CHANCES.normal + specialTotal);
   if (roll < PLATFORM_SPAWN_CHANCES.normal) return PLATFORM_TYPES.NORMAL;
@@ -193,16 +309,15 @@ function choosePlatformType(forceNormal = false) {
   }
   return PLATFORM_TYPES.NORMAL;
 }
-function addPlatform(y, index, from, forbidden, forceNormal = false) {
+function addPlatform(y, index, from, forbidden, onMainPath = false) {
   let width = getPlatformWidth();
-  const type = choosePlatformType(forceNormal);
+  const type = choosePlatformType(onMainPath);
   if (type === PLATFORM_TYPES.SMALL) width *= .68;
   const x = from ? findPlatformX(from, y, width, forbidden) : 18 + Math.random() * Math.max(18, game.width - width - 36);
   const platform = { x, y, width, height: 10, type, pulse: Math.random() * 6.28, velocityX: 0, velocityY: 0, baseY: y, active: true, destroyed: false, breakTimer: 0 };
   if (type === PLATFORM_TYPES.MOVING) platform.velocityX = (Math.random() < .5 ? -1 : 1) * SPECIAL_PLATFORM_CONFIG.moving.speed;
   if (type === PLATFORM_TYPES.MOVING_VERTICAL) platform.velocityY = (Math.random() < .5 ? -1 : 1) * SPECIAL_PLATFORM_CONFIG.movingVertical.speed;
   game.platforms.push(platform);
-  if (index > 1 && index % 4 === 0) game.collectibles.push({ x: x + width / 2, y: y - 28, collected: false, spin: Math.random() * 6.28, kind: index % 8 === 0 ? 'snow' : 'star' });
   return platform;
 }
 function generatePlatforms() {
@@ -223,7 +338,7 @@ function startGame() {
   requestTiltPermission();
   resizeCanvas(); resetGame(); game.running = true; startScreen.classList.add('hidden'); gameOverScreen.classList.add('hidden'); pauseScreen.classList.add('hidden'); hud.classList.remove('hidden'); canvas.focus(); requestAnimationFrame(loop); playTone(220, .08);
 }
-function endGame() { game.running = false; hud.classList.add('hidden'); gameOverScreen.classList.remove('hidden'); document.getElementById('finalScore').textContent = String(Math.floor(game.score)).padStart(5, '0'); document.getElementById('finalAltitude').textContent = `${Math.floor(game.altitude)} m`; document.getElementById('finalStickers').textContent = game.stickers; if (game.score > bestScore) { bestScore = Math.floor(game.score); localStorage.setItem(bestScoreKey, bestScore); bestScoreEl.textContent = String(bestScore).padStart(5, '0'); } playTone(110, .2); }
+function endGame() { game.running = false; hud.classList.add('hidden'); gameOverScreen.classList.remove('hidden'); document.getElementById('finalScore').textContent = String(Math.floor(game.score)).padStart(5, '0'); document.getElementById('finalAltitude').textContent = `${Math.floor(game.altitude)} m`; if (game.score > bestScore) { bestScore = Math.floor(game.score); localStorage.setItem(bestScoreKey, bestScore); bestScoreEl.textContent = String(bestScore).padStart(5, '0'); } openScoreForm(); playTone(110, .2); }
 function togglePause() { if (!game.running) return; clearControls(); game.paused = !game.paused; pauseScreen.classList.toggle('hidden', !game.paused); if (!game.paused) { game.lastTime = performance.now(); requestAnimationFrame(loop); } }
 
 function loop(timestamp) {
@@ -289,23 +404,24 @@ function update(delta) {
     game.score += shift * .3;
     game.altitude += shift * .22;
     game.platforms.forEach(platform => { platform.y += shift; if (platform.type === PLATFORM_TYPES.MOVING_VERTICAL) platform.baseY += shift; });
-    game.collectibles.forEach(item => { item.y += shift; });
   }
   game.platforms = game.platforms.filter(platform => !platform.destroyed && platform.y < game.height + PLATFORM_CONFIG.removeBelowScreen);
-  game.collectibles = game.collectibles.filter(item => item.y < game.height + PLATFORM_CONFIG.removeBelowScreen && !item.collected);
   generatePlatforms();
-  game.collectibles.forEach(item => { item.spin += delta * 4; if (!item.collected && Math.abs(player.x + player.width / 2 - item.x) < 24 && Math.abs(player.y + player.height / 2 - item.y) < 29) { item.collected = true; game.stickers += 1; burst(item.x, item.y, 'sticker'); showToast(item.kind === 'snow' ? 'ZINZIN CAPTÉ !' : 'STICKER CAPTÉ !'); playTone(600, .12); } });
   game.particles.forEach(particle => { particle.x += particle.vx * delta; particle.y += particle.vy * delta; particle.life -= delta; particle.vy += 80 * delta; }); game.particles = game.particles.filter(particle => particle.life > 0);
   player.rotation += player.velocityX * delta * .002;
   if (player.y > game.height + 120) endGame();
   updateHud();
 }
-function updateHud() { document.getElementById('score').textContent = String(Math.floor(game.score)).padStart(5, '0'); document.getElementById('altitude').textContent = Math.floor(game.altitude); document.getElementById('stickerCount').textContent = game.stickers; document.getElementById('missionProgress').textContent = `${Math.min(game.stickers, 3)}/3`; document.getElementById('missionBar').style.width = `${Math.min(game.stickers / 3 * 100, 100)}%`; document.getElementById('altitudeBar').style.transform = `scaleX(${Math.min(game.altitude / 900, 1)})`; }
-function burst(x, y, type) { const color = type === 'coral' ? '#ff6654' : type === 'cyan' ? '#6ee9db' : type === 'sticker' ? '#d8f546' : '#d8f546'; for (let index = 0; index < 8; index += 1) game.particles.push({ x, y, vx: (Math.random() - .5) * 150, vy: (Math.random() - .8) * 180, life: .3 + Math.random() * .35, color, size: 2 + Math.random() * 3 }); }
-function showToast(text) { toast.textContent = text; toast.classList.remove('hidden'); window.clearTimeout(showToast.timer); showToast.timer = window.setTimeout(() => toast.classList.add('hidden'), 1400); }
+function updateHud() { document.getElementById('score').textContent = String(Math.floor(game.score)).padStart(5, '0'); document.getElementById('altitude').textContent = Math.floor(game.altitude); document.getElementById('altitudeBar').style.transform = `scaleX(${Math.min(game.altitude / 900, 1)})`; }
+function burst(x, y, type) { const color = type === PLATFORM_TYPES.DISAPPEARING || type === PLATFORM_TYPES.TRAMPOLINE ? '#00ffff' : '#8cff3a'; for (let index = 0; index < 8; index += 1) game.particles.push({ x, y, vx: (Math.random() - .5) * 150, vy: (Math.random() - .8) * 180, life: .3 + Math.random() * .35, color, size: 2 + Math.random() * 3 }); }
 
-function draw() { context.clearRect(0, 0, game.width, game.height); drawBackground(); game.platforms.forEach(drawPlatform); game.collectibles.forEach(drawCollectible); game.particles.forEach(drawParticle); drawPlayer(); }
-function drawBackground() { const gradient = context.createLinearGradient(0, 0, 0, game.height); gradient.addColorStop(0, '#18253b'); gradient.addColorStop(1, '#10141d'); context.fillStyle = gradient; context.fillRect(0, 0, game.width, game.height); game.stars.forEach(star => { const y = (star.y + game.cameraY * .08) % game.height; context.globalAlpha = star.alpha; context.fillStyle = star.size > 1 ? '#d8f546' : '#f1eee5'; context.fillRect(star.x, y, star.size, star.size); }); context.globalAlpha = 1; for (let index = 0; index < 4; index += 1) { context.strokeStyle = index === 0 ? 'rgba(110,233,219,.11)' : 'rgba(241,238,229,.045)'; context.lineWidth = index === 0 ? 2 : 1; context.beginPath(); context.arc(game.width * .86, game.height * .25, 80 + index * 23, 0, Math.PI * 2); context.stroke(); } }
+function draw() { context.clearRect(0, 0, game.width, game.height); drawBackground(); game.platforms.forEach(drawPlatform); game.particles.forEach(drawParticle); drawPlayer(); }
+function drawBackground() {
+  const gradient = context.createLinearGradient(0, 0, 0, game.height); gradient.addColorStop(0, '#0b0636'); gradient.addColorStop(1, '#00001a'); context.fillStyle = gradient; context.fillRect(0, 0, game.width, game.height);
+  const nebulas = [[.85, .22, 'rgba(140,255,58,.13)', 'rgba(0,0,255,.1)'], [.1, .85, 'rgba(255,0,255,.2)', 'rgba(255,140,0,.08)']];
+  nebulas.forEach(([x, y, inner, outer]) => { const glow = context.createRadialGradient(game.width * x, game.height * y, 0, game.width * x, game.height * y, game.width * .75); glow.addColorStop(0, inner); glow.addColorStop(.5, outer); glow.addColorStop(1, 'rgba(0,0,26,0)'); context.fillStyle = glow; context.fillRect(0, 0, game.width, game.height); });
+  game.stars.forEach(star => { const y = (star.y + game.cameraY * .08) % game.height; context.globalAlpha = star.alpha; context.fillStyle = star.size > 1 ? '#00ffff' : '#ffffff'; context.fillRect(star.x, y, star.size, star.size); }); context.globalAlpha = 1;
+}
 function drawPlatform(platform) {
   const { x, y, width } = platform;
   const specialSprite = platform.type !== PLATFORM_TYPES.NORMAL && platform.type !== 'base' ? specialPlatformSprites[platform.type] : null;
@@ -365,7 +481,6 @@ function drawPlatform(platform) {
   }
   context.restore();
 }
-function drawCollectible(item) { const scale = .75 + Math.abs(Math.sin(item.spin)) * .25; context.save(); context.translate(item.x, item.y); context.rotate(item.spin * .25); context.scale(scale, scale); context.fillStyle = item.kind === 'snow' ? '#d9c7ff' : '#d8f546'; context.beginPath(); for (let index = 0; index < 8; index += 1) { const radius = index % 2 ? 5 : 13; const angle = -Math.PI / 2 + index * Math.PI / 4; context.lineTo(Math.cos(angle) * radius, Math.sin(angle) * radius); } context.closePath(); context.fill(); context.fillStyle = '#10141d'; context.font = '12px sans-serif'; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(item.kind === 'snow' ? '⛄' : '✦', 0, 1); context.restore(); }
 function drawPlayer() { const player = game.player; const squash = player.squashTimer > 0 ? player.squashTimer / .16 : 0; const scaleX = 1 + squash * .13; const scaleY = 1 - squash * .2; context.save(); context.translate(player.x + player.width / 2, player.y + player.height / 2); context.rotate(player.rotation); context.scale(scaleX, scaleY); context.fillStyle = 'rgba(0,0,0,.3)'; context.beginPath(); context.ellipse(0, 19, 13, 2.5, 0, 0, Math.PI * 2); context.fill(); if (playerSprite) { context.drawImage(playerSprite, -16, -18, 32, 36); } else { context.fillStyle = '#d8f546'; context.beginPath(); context.ellipse(0, -2, 16, 18, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#10141d'; context.beginPath(); context.ellipse(0, 1, 13, 10, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#f1eee5'; context.beginPath(); context.arc(-5, -1, 2.5, 0, Math.PI * 2); context.arc(5, -1, 2.5, 0, Math.PI * 2); context.fill(); } context.restore(); }
 function drawParticle(particle) { context.globalAlpha = Math.max(0, particle.life * 2); context.fillStyle = particle.color; context.fillRect(particle.x, particle.y, particle.size, particle.size); context.globalAlpha = 1; }
 
@@ -379,7 +494,7 @@ function syncControls() {
   keys.right = keyboardKeys.right || touchDirections.includes('right');
   if (game.player && !keys.left && !keys.right) game.player.velocityX = 0;
 }
-function handleKeyDown(event) { if (event.code === 'ArrowLeft') { keyboardKeys.left = true; syncControls(); event.preventDefault(); } if (event.code === 'ArrowRight') { keyboardKeys.right = true; syncControls(); event.preventDefault(); } if (event.code === 'KeyP') togglePause(); }
+function handleKeyDown(event) { if (event.target instanceof HTMLInputElement) return; if (event.code === 'ArrowLeft') { keyboardKeys.left = true; syncControls(); event.preventDefault(); } if (event.code === 'ArrowRight') { keyboardKeys.right = true; syncControls(); event.preventDefault(); } if (event.code === 'KeyP') togglePause(); }
 function handleKeyUp(event) { if (event.code === 'ArrowLeft') keyboardKeys.left = false; if (event.code === 'ArrowRight') keyboardKeys.right = false; syncControls(); }
 function clearControls() { keyboardKeys.left = false; keyboardKeys.right = false; touchPointers.clear(); keys.left = false; keys.right = false; if (game.player) game.player.velocityX = 0; }
 document.addEventListener('keydown', handleKeyDown); document.addEventListener('keyup', handleKeyUp);
