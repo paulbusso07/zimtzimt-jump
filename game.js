@@ -60,23 +60,14 @@ platformImage.onload = () => {
   platformSprite.getContext('2d').drawImage(sourceCanvas, minX, minY, platformSprite.width, platformSprite.height, 0, 0, platformSprite.width, platformSprite.height);
 };
 platformImage.src = 'palteforme.jpeg';
-const specialPlatformImage = new Image();
 const specialPlatformSprites = {};
-specialPlatformImage.onload = () => {
-  const crops = {
-    normal: [.07, .08, .25, .14], moving: [.39, .08, .28, .14], movingVertical: [.73, .07, .22, .16],
-    breakable: [.08, .41, .25, .15], disappearing: [.4, .42, .28, .15], small: [.78, .42, .15, .13],
-    bouncy: [.23, .72, .18, .18], trampoline: [.62, .72, .22, .18]
-  };
-  Object.entries(crops).forEach(([type, [x, y, width, height]]) => {
-    const sprite = document.createElement('canvas');
-    sprite.width = Math.floor(specialPlatformImage.naturalWidth * width);
-    sprite.height = Math.floor(specialPlatformImage.naturalHeight * height);
-    sprite.getContext('2d').drawImage(specialPlatformImage, Math.floor(specialPlatformImage.naturalWidth * x), Math.floor(specialPlatformImage.naturalHeight * y), sprite.width, sprite.height, 0, 0, sprite.width, sprite.height);
-    specialPlatformSprites[type] = sprite;
-  });
-};
-specialPlatformImage.src = 'plateformespeciales.png';
+// Pre-cut sprites (sprites/*.png) are trimmed to the platform width; surfaceOffset = pixels of effects above the walkable surface.
+const SPECIAL_SPRITE_SURFACE_OFFSET = { disappearing: 10 };
+['moving', 'movingVertical', 'breakable', 'disappearing', 'small', 'bouncy', 'trampoline'].forEach(type => {
+  const image = new Image();
+  image.onload = () => { specialPlatformSprites[type] = image; };
+  image.src = `sprites/${type}.png`;
+});
 const keys = { left: false, right: false };
 const keyboardKeys = { left: false, right: false };
 const touchPointers = new Map();
@@ -319,10 +310,11 @@ function drawPlatform(platform) {
   const { x, y, width } = platform;
   const specialSprite = platform.type !== PLATFORM_TYPES.NORMAL && platform.type !== 'base' ? specialPlatformSprites[platform.type] : null;
   if (specialSprite) {
-    const platformVisualHeight = width * specialSprite.height / specialSprite.width * .7;
+    const scale = width / specialSprite.naturalWidth;
+    const surfaceOffset = (SPECIAL_SPRITE_SURFACE_OFFSET[platform.type] || 0) * scale;
     context.save();
     context.globalAlpha = platform.active ? (platform.breakTimer > 0 ? .45 + Math.abs(Math.sin(platform.breakTimer * 22)) * .55 : 1) : .35;
-    context.drawImage(specialSprite, x, y - 2, width, platformVisualHeight);
+    context.drawImage(specialSprite, x, y - 2 - surfaceOffset, width, specialSprite.naturalHeight * scale);
     if (platform.type === PLATFORM_TYPES.BREAKABLE && platform.breakTimer > 0) {
       context.strokeStyle = '#10141d'; context.lineWidth = 2; context.beginPath(); context.moveTo(x + width * .3, y + 2); context.lineTo(x + width * .42, y + 9); context.lineTo(x + width * .55, y + 3); context.lineTo(x + width * .7, y + 10); context.stroke();
     }
