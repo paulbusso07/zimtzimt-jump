@@ -45,6 +45,17 @@
           <li><img src="sprites/bouncy.png" alt="" /><span title="Super saut.">Ressort</span></li>
           <li><img src="sprites/trampoline.png" alt="" /><span title="Propulsion maximale, usage unique.">Trampoline</span></li>
         </ul>
+        <div class="panel-kicker monsters-kicker">Les monstres</div>
+        <ul class="platform-guide monster-guide">
+          <li><img src="sprites/monster-classic.png" alt="" /><span title="Reste sur sa plateforme.">Classique</span></li>
+          <li><img src="sprites/monster-jumper.png" alt="" /><span title="Saute de plateforme en plateforme.">Sauteur</span></li>
+          <li><img src="sprites/monster-flying.png" alt="" /><span title="Traverse l'écran en volant.">Volant</span></li>
+        </ul>
+        <p class="monster-tip">Quand un monstre approche, ton zinzin tire droit vers le haut : place-toi dessous pour l’atteindre. Tu peux aussi lui retomber dessus, mais ne le touche surtout pas autrement !</p>
+        <div class="panel-kicker monsters-kicker">Les bonus</div>
+        <ul class="platform-guide monster-guide">
+          <li><img src="sprites/jetpack.png" alt="" /><span title="Touche-le pour t'envoler très haut pendant quelques secondes.">Jetpack</span></li>
+        </ul>
       </aside>
 
       <section class="game-card" aria-label="Jeu Z'imtZ'imt Jump">
@@ -61,7 +72,7 @@
           </div>
           <div class="pause-screen hidden" id="pauseScreen"><div class="pause-mark">Ⅱ</div><span>Pause</span><small>Appuie sur P ou Ⅱ pour reprendre</small></div>
           <div class="game-over hidden" id="gameOver">
-            <div class="over-eyebrow">Signal perdu</div>
+            <div class="over-eyebrow" id="overReason">Signal perdu</div>
             <h2>Retour sur <span>Terre.</span></h2>
             <div class="final-score-label">Score</div>
             <div class="final-score" id="finalScore">00000</div>
