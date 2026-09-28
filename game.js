@@ -452,7 +452,10 @@ function resizeCanvas() {
 function resetGame() {
   clearControls();
   game.score = 0; game.altitude = 0; game.cameraY = 0; game.lastTime = 0; game.paused = false;
-  const basePlatform = { x: game.width / 2 - 62, y: game.height - 45, width: 124, height: 11, type: 'base', pulse: 0 };
+  const basePlatform = { x: game.width / 2 - 62, y: game.height - 45, width: 124, height: 11, type: 'base', pulse: 0, active: true, destroyed: false, breakTimer: 0 };
+  // Nothing spawns over the player's first bounces, so an idle player keeps hopping on the base platform.
+  const jumpHeight = PHYSICS.jumpVelocity ** 2 / (2 * PHYSICS.gravity);
+  game.startColumn = { left: game.width / 2 - 25, right: game.width / 2 + 21, top: basePlatform.y - jumpHeight - 12 };
   game.player = { x: game.width / 2 - 17, y: basePlatform.y - 43, width: 34, height: 43, velocityY: PHYSICS.jumpVelocity, velocityX: 0, rotation: 0, squashTimer: 0, shield: false, invulnerable: 0, springJumps: 0, swallowed: null, swallowTime: 0 };
   game.platforms = [basePlatform];
   game.particles = [];
@@ -505,13 +508,18 @@ function findPlatformX(from, y, width, forbidden) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const x = 18 + Math.random() * maxX;
     const overlapsForbidden = forbidden && x < forbidden.x + forbidden.width + 18 && x + width + 18 > forbidden.x;
-    if (!overlapsForbidden && !isNearBlackHole(x, y, width) && isReachable(from, x, y, width)) return x;
+    if (!overlapsForbidden && !isBlockedSpot(x, y, width) && isReachable(from, x, y, width)) return x;
   }
   const reach = getHorizontalReach(getLandingTime(Math.max(0, from.y - y)));
   const direction = Math.random() < .5 ? -1 : 1;
   const candidates = [direction, -direction].map(side => Math.max(18, Math.min(maxX, from.x + side * Math.min(reach, game.width * .38))));
-  return candidates.find(x => !isNearBlackHole(x, y, width)) ?? candidates[0];
+  return candidates.find(x => !isBlockedSpot(x, y, width)) ?? candidates[0];
 }
+function isInStartColumn(x, y, width) {
+  const column = game.startColumn;
+  return game.cameraY === 0 && y > column.top && x < column.right && x + width > column.left;
+}
+function isBlockedSpot(x, y, width) { return isNearBlackHole(x, y, width) || isInStartColumn(x, y, width); }
 function choosePlatformType(onMainPath = false) {
   if (game.altitude < 30) return PLATFORM_TYPES.NORMAL;
   const progression = .4 + .6 * Math.min(1, (game.altitude - 30) / 700);
@@ -1426,7 +1434,8 @@ function drawParticle(particle) { context.globalAlpha = Math.max(0, particle.lif
 
 function playTone(frequency, duration) { if (!game.audio) game.audio = new (window.AudioContext || window.webkitAudioContext)(); const oscillator = game.audio.createOscillator(); const gain = game.audio.createGain(); oscillator.frequency.value = frequency; oscillator.type = 'square'; gain.gain.setValueAtTime(.025, game.audio.currentTime); gain.gain.exponentialRampToValueAtTime(.001, game.audio.currentTime + duration); oscillator.connect(gain); gain.connect(game.audio.destination); oscillator.start(); oscillator.stop(game.audio.currentTime + duration); }
 document.getElementById('startButton').addEventListener('click', startGame); document.getElementById('restartButton').addEventListener('click', startGame); document.getElementById('pauseButton').addEventListener('click', togglePause);
-window.addEventListener('resize', () => { if (!game.running) resizeCanvas(); });
+// Mobile toolbars showing/hiding and rotations resize the canvas mid-game; keep its bitmap in step so nothing stretches.
+window.addEventListener('resize', () => { resizeCanvas(); if (game.player && (game.paused || !game.running)) draw(); });
 function syncControls() {
   const touchDirections = [...touchPointers.values()];
   keys.left = keyboardKeys.left || touchDirections.includes('left');
