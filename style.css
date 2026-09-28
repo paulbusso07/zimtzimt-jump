@@ -117,6 +117,14 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 5px; border: 1px soli
 .secondary-button { border-color: var(--cyan); background: transparent; text-shadow: 0 0 6px var(--cyan); box-shadow: 0 0 12px var(--cyan-glow); }
 .leaderboard-mini { display: none; width: min(300px, 100%); margin-bottom: 14px; text-align: left; }
 .pause-screen { background: rgba(0, 0, 26, .8); }
+.modal { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 26, .78); backdrop-filter: blur(4px); }
+.modal[hidden] { display: none; }
+.modal-card { width: min(460px, 100%); max-height: min(720px, calc(100vh - 32px)); max-height: min(720px, calc(100dvh - 32px)); display: flex; flex-direction: column; padding: 22px; background: #07052a; border: 2px solid var(--pink); border-radius: 18px; box-shadow: 0 0 18px var(--pink-glow), 0 0 50px rgba(0, 255, 255, .15); }
+.modal-header { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.modal-header .panel-kicker { margin-bottom: 6px; }
+.modal-header h2 { margin: 0; font: 400 26px var(--font-main); }
+.leaderboard-full { flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.leaderboard-full li { grid-template-columns: 34px 1fr auto auto; }
 .pause-mark { font: 900 48px var(--font-ui); line-height: .8; color: var(--cyan); text-shadow: var(--neon-cyan); }
 .pause-screen span { font: 700 14px var(--font-ui); letter-spacing: .2em; text-transform: uppercase; margin-top: 18px; }
 .pause-screen small { color: var(--muted); margin-top: 8px; font-size: 13px; }

@@ -166,7 +166,7 @@ let bestScore = Number(localStorage.getItem(bestScoreKey) || 0);
 bestScoreEl.textContent = String(bestScore).padStart(5, '0');
 // Shared leaderboard: Supabase project URL and publishable (anon) key, schema in supabase/scores.sql.
 // While either is empty, scores are only kept in this browser.
-const LEADERBOARD_CONFIG = { supabaseUrl: 'https://tenylbmbkcltasmjtzij.supabase.co', supabaseKey: 'sb_publishable_nVIbQbndLXEE6QgXdC7iCQ_AapxPT9a', table: 'scores', size: 10 };
+const LEADERBOARD_CONFIG = { supabaseUrl: 'https://tenylbmbkcltasmjtzij.supabase.co', supabaseKey: 'sb_publishable_nVIbQbndLXEE6QgXdC7iCQ_AapxPT9a', table: 'scores', size: 10, fullSize: 100 };
 const LOCAL_SCORES_KEY = 'zimtzimt-jump-scores';
 const PLAYER_NAME_KEY = 'zimtzimt-jump-name';
 const leaderboardEl = document.getElementById('leaderboard');
@@ -194,9 +194,9 @@ function sameName(first, second) { return first.toLowerCase() === second.toLower
 function getPlayerName() { try { return localStorage.getItem(PLAYER_NAME_KEY) || ''; } catch { return ''; } }
 function setPlayerName(name) { try { localStorage.setItem(PLAYER_NAME_KEY, name); } catch {} }
 function readLocalScores() { try { return JSON.parse(localStorage.getItem(LOCAL_SCORES_KEY)) || []; } catch { return []; } }
-async function fetchTopScores() {
-  if (!isOnlineLeaderboard()) return readLocalScores().slice(0, LEADERBOARD_CONFIG.size);
-  const response = await fetch(`${LEADERBOARD_CONFIG.supabaseUrl}/rest/v1/${LEADERBOARD_CONFIG.table}?select=name,score,device&order=score.desc,created_at.asc&limit=${LEADERBOARD_CONFIG.size}`, { headers: supabaseHeaders() });
+async function fetchTopScores(limit = LEADERBOARD_CONFIG.size) {
+  if (!isOnlineLeaderboard()) return readLocalScores().slice(0, limit);
+  const response = await fetch(`${LEADERBOARD_CONFIG.supabaseUrl}/rest/v1/${LEADERBOARD_CONFIG.table}?select=name,score,device&order=score.desc,created_at.asc&limit=${limit}`, { headers: supabaseHeaders() });
   if (!response.ok) throw new Error(`Leaderboard HTTP ${response.status}`);
   return response.json();
 }
@@ -215,10 +215,10 @@ async function saveScore(entry) {
   return response.json();
 }
 function leaderboardMessage(text) { const item = document.createElement('li'); item.className = 'leaderboard-empty'; item.textContent = text; return item; }
-function renderLeaderboard(entries) {
+function renderLeaderboard(entries, lists = [leaderboardEl, leaderboardMiniEl]) {
   const playerName = getPlayerName();
   const myIndex = playerName ? entries.findIndex(entry => sameName(entry.name, playerName)) : -1;
-  [leaderboardEl, leaderboardMiniEl].forEach(list => {
+  lists.forEach(list => {
     if (!entries.length) { list.replaceChildren(leaderboardMessage('Aucun score pour l’instant. À toi de jouer !')); return; }
     list.replaceChildren(...entries.map((entry, index) => {
       const item = document.createElement('li');
@@ -283,6 +283,32 @@ scoreForm.addEventListener('submit', event => {
   submitPendingScore(name);
 });
 changeNameButton.addEventListener('click', () => { setScoreStatus(''); showNameForm(''); });
+const leaderboardModal = document.getElementById('leaderboardModal');
+const leaderboardFullEl = document.getElementById('leaderboardFull');
+let pausedForLeaderboard = false;
+async function openLeaderboardModal() {
+  pausedForLeaderboard = game.running && !game.paused;
+  if (pausedForLeaderboard) togglePause();
+  leaderboardFullEl.replaceChildren(leaderboardMessage('Chargement…'));
+  leaderboardModal.hidden = false;
+  document.getElementById('closeLeaderboardButton').focus();
+  try {
+    const myIndex = renderLeaderboard(await fetchTopScores(LEADERBOARD_CONFIG.fullSize), [leaderboardFullEl]);
+    leaderboardFullEl.children[myIndex]?.scrollIntoView({ block: 'center' });
+  } catch {
+    leaderboardFullEl.replaceChildren(leaderboardMessage('Classement indisponible pour le moment.'));
+  }
+}
+function closeLeaderboardModal() {
+  if (leaderboardModal.hidden) return;
+  leaderboardModal.hidden = true;
+  if (pausedForLeaderboard && game.paused) togglePause();
+  pausedForLeaderboard = false;
+}
+document.getElementById('leaderboardButton').addEventListener('click', openLeaderboardModal);
+document.getElementById('closeLeaderboardButton').addEventListener('click', closeLeaderboardModal);
+leaderboardModal.addEventListener('click', event => { if (event.target === leaderboardModal) closeLeaderboardModal(); });
+document.addEventListener('keydown', event => { if (event.key === 'Escape') closeLeaderboardModal(); });
 refreshLeaderboard();
 setInterval(() => { if (!game.running) refreshLeaderboard(); }, 60000);
 
@@ -855,8 +881,7 @@ function drawPlatform(platform) {
 function drawPlayer() { const player = game.player; const squash = player.squashTimer > 0 ? player.squashTimer / .16 : 0; const scaleX = 1 + squash * .13; const scaleY = 1 - squash * .2; context.save(); context.translate(player.x + player.width / 2, player.y + player.height); context.rotate(player.rotation); context.scale(scaleX, scaleY); context.fillStyle = 'rgba(0,0,0,.3)'; context.beginPath(); context.ellipse(0, 0, 13, 2.5, 0, 0, Math.PI * 2); context.fill(); if (playerSprite) { context.drawImage(playerSprite, -16, -PLAYER_SPRITE_FEET, 32, 36); } else { context.translate(0, -player.height / 2); context.fillStyle = '#d8f546'; context.beginPath(); context.ellipse(0, -2, 16, 18, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#10141d'; context.beginPath(); context.ellipse(0, 1, 13, 10, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#f1eee5'; context.beginPath(); context.arc(-5, -1, 2.5, 0, Math.PI * 2); context.arc(5, -1, 2.5, 0, Math.PI * 2); context.fill(); } context.restore(); }
 function drawParticle(particle) { context.globalAlpha = Math.max(0, particle.life * 2); context.fillStyle = particle.color; context.fillRect(particle.x, particle.y, particle.size, particle.size); context.globalAlpha = 1; }
 
-function playTone(frequency, duration) { if (!document.getElementById('soundToggle').dataset.on) return; if (!game.audio) game.audio = new (window.AudioContext || window.webkitAudioContext)(); const oscillator = game.audio.createOscillator(); const gain = game.audio.createGain(); oscillator.frequency.value = frequency; oscillator.type = 'square'; gain.gain.setValueAtTime(.025, game.audio.currentTime); gain.gain.exponentialRampToValueAtTime(.001, game.audio.currentTime + duration); oscillator.connect(gain); gain.connect(game.audio.destination); oscillator.start(); oscillator.stop(game.audio.currentTime + duration); }
-document.getElementById('soundToggle').dataset.on = 'true'; document.getElementById('soundToggle').addEventListener('click', event => { const on = event.currentTarget.dataset.on === 'true'; event.currentTarget.dataset.on = String(!on); event.currentTarget.textContent = on ? '×' : '♫'; });
+function playTone(frequency, duration) { if (!game.audio) game.audio = new (window.AudioContext || window.webkitAudioContext)(); const oscillator = game.audio.createOscillator(); const gain = game.audio.createGain(); oscillator.frequency.value = frequency; oscillator.type = 'square'; gain.gain.setValueAtTime(.025, game.audio.currentTime); gain.gain.exponentialRampToValueAtTime(.001, game.audio.currentTime + duration); oscillator.connect(gain); gain.connect(game.audio.destination); oscillator.start(); oscillator.stop(game.audio.currentTime + duration); }
 document.getElementById('startButton').addEventListener('click', startGame); document.getElementById('restartButton').addEventListener('click', startGame); document.getElementById('pauseButton').addEventListener('click', togglePause);
 window.addEventListener('resize', () => { if (!game.running) resizeCanvas(); });
 function syncControls() {
@@ -864,7 +889,7 @@ function syncControls() {
   keys.left = keyboardKeys.left || touchDirections.includes('left');
   keys.right = keyboardKeys.right || touchDirections.includes('right');
 }
-function handleKeyDown(event) { if (event.target instanceof HTMLInputElement) return; if (event.code === 'ArrowLeft') { keyboardKeys.left = true; syncControls(); event.preventDefault(); } if (event.code === 'ArrowRight') { keyboardKeys.right = true; syncControls(); event.preventDefault(); } if (event.code === 'KeyP') togglePause(); }
+function handleKeyDown(event) { if (event.target instanceof HTMLInputElement || !leaderboardModal.hidden) return; if (event.code === 'ArrowLeft') { keyboardKeys.left = true; syncControls(); event.preventDefault(); } if (event.code === 'ArrowRight') { keyboardKeys.right = true; syncControls(); event.preventDefault(); } if (event.code === 'KeyP') togglePause(); }
 function handleKeyUp(event) { if (event.code === 'ArrowLeft') keyboardKeys.left = false; if (event.code === 'ArrowRight') keyboardKeys.right = false; syncControls(); }
 function clearControls() { keyboardKeys.left = false; keyboardKeys.right = false; touchPointers.clear(); keys.left = false; keys.right = false; if (game.player) game.player.velocityX = 0; }
 document.addEventListener('keydown', handleKeyDown); document.addEventListener('keyup', handleKeyUp);

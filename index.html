@@ -19,7 +19,7 @@
         <img src="assets/logo.webp" alt="Z'imtZ'imt" />
         <span class="brand-product">JUMP</span>
       </a>
-      <button class="icon-button" id="soundToggle" aria-label="Couper le son" title="Son">♫</button>
+      <button class="icon-button" id="leaderboardButton" aria-label="Voir le classement complet" title="Classement complet">🏆</button>
     </header>
 
     <main class="game-layout" id="game">
@@ -97,6 +97,15 @@
       </aside>
     </main>
     <footer class="site-footer"><span>© Z'imtZ'imt</span><a href="https://zimtzimt.com" target="_blank" rel="noopener">zimtzimt.com</a></footer>
+  </div>
+  <div class="modal" id="leaderboardModal" role="dialog" aria-modal="true" aria-labelledby="leaderboardTitle" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <div><div class="panel-kicker">Galaxie Z'imtZ'imt</div><h2 id="leaderboardTitle">Classement complet</h2></div>
+        <button class="icon-button" id="closeLeaderboardButton" aria-label="Fermer le classement">✕</button>
+      </div>
+      <ol class="leaderboard leaderboard-full" id="leaderboardFull"></ol>
+    </div>
   </div>
   <script src="game.js"></script>
 </body>
