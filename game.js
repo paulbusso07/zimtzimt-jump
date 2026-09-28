@@ -280,25 +280,26 @@ function supabaseHeaders(extra = {}) {
   if (LEADERBOARD_CONFIG.supabaseKey.startsWith('eyJ')) headers.Authorization = `Bearer ${LEADERBOARD_CONFIG.supabaseKey}`;
   return headers;
 }
-const DEVICE_LABELS = { pc: { icon: '💻', title: 'Record fait sur PC' }, mobile: { icon: '📱', title: 'Record fait sur mobile' } };
 // Touch-first devices count as mobile; touchscreen laptops keep a fine primary pointer and stay 'pc'.
 function getDevice() { return navigator.maxTouchPoints > 0 && matchMedia('(pointer: coarse)').matches ? 'mobile' : 'pc'; }
+// PC and mobile have separate leaderboards; the tabs start on the device being played on.
+let leaderboardDevice = getDevice();
 function normalizeName(name) { return name.trim().replace(/\s+/g, ' ').slice(0, 16); }
 function sameName(first, second) { return first.toLowerCase() === second.toLowerCase(); }
 function getPlayerName() { try { return localStorage.getItem(PLAYER_NAME_KEY) || ''; } catch { return ''; } }
 function setPlayerName(name) { try { localStorage.setItem(PLAYER_NAME_KEY, name); } catch {} }
 function readLocalScores() { try { return JSON.parse(localStorage.getItem(LOCAL_SCORES_KEY)) || []; } catch { return []; } }
-async function fetchTopScores(limit = LEADERBOARD_CONFIG.size) {
-  if (!isOnlineLeaderboard()) return readLocalScores().slice(0, limit);
-  const response = await fetch(`${LEADERBOARD_CONFIG.supabaseUrl}/rest/v1/${LEADERBOARD_CONFIG.table}?select=name,score,device&order=score.desc,created_at.asc&limit=${limit}`, { headers: supabaseHeaders() });
+async function fetchTopScores(limit = LEADERBOARD_CONFIG.size, device = leaderboardDevice) {
+  if (!isOnlineLeaderboard()) return readLocalScores().filter(score => (score.device || 'pc') === device).slice(0, limit);
+  const response = await fetch(`${LEADERBOARD_CONFIG.supabaseUrl}/rest/v1/${LEADERBOARD_CONFIG.table}?select=name,score,device&device=eq.${device}&order=score.desc,created_at.asc&limit=${limit}`, { headers: supabaseHeaders() });
   if (!response.ok) throw new Error(`Leaderboard HTTP ${response.status}`);
   return response.json();
 }
-// Keeps one entry per player (case-insensitive name) holding their best score; resolves to that best score.
+// Keeps one entry per player (case-insensitive name) and device holding their best score; resolves to that best score.
 async function saveScore(entry) {
   if (!isOnlineLeaderboard()) {
     const scores = readLocalScores();
-    const existing = scores.find(score => sameName(score.name, entry.name));
+    const existing = scores.find(score => sameName(score.name, entry.name) && (score.device || 'pc') === entry.device);
     if (existing && existing.score >= entry.score) return existing.score;
     const updated = [...scores.filter(score => score !== existing), entry].sort((first, second) => second.score - first.score).slice(0, 50);
     localStorage.setItem(LOCAL_SCORES_KEY, JSON.stringify(updated));
@@ -317,10 +318,8 @@ function renderLeaderboard(entries, lists = [leaderboardEl, leaderboardMiniEl]) 
     list.replaceChildren(...entries.map((entry, index) => {
       const item = document.createElement('li');
       const name = document.createElement('span'); name.className = 'leaderboard-name'; name.textContent = entry.name;
-      const device = DEVICE_LABELS[entry.device] || DEVICE_LABELS.pc;
-      const deviceIcon = document.createElement('span'); deviceIcon.className = 'leaderboard-device'; deviceIcon.textContent = device.icon; deviceIcon.title = device.title;
       const score = document.createElement('span'); score.className = 'leaderboard-score'; score.textContent = String(entry.score).padStart(5, '0');
-      item.append(name, deviceIcon, score);
+      item.append(name, score);
       if (index === myIndex) item.classList.add('is-me');
       return item;
     }));
@@ -353,6 +352,7 @@ async function submitPendingScore(name) {
   try {
     const best = await saveScore({ name, ...pendingScore });
     setPlayerName(name);
+    setLeaderboardDevice(pendingScore.device);
     const myIndex = await refreshLeaderboard();
     const rank = myIndex >= 0 ? ` · n°${myIndex + 1}` : '';
     setScoreStatus(best > pendingScore.score ? `${name}, ton record reste ${String(best).padStart(5, '0')}${rank}` : `Record enregistré pour ${name}${rank} !`, 'success');
@@ -383,9 +383,12 @@ let pausedForLeaderboard = false;
 async function openLeaderboardModal() {
   pausedForLeaderboard = game.running && !game.paused;
   if (pausedForLeaderboard) togglePause();
-  leaderboardFullEl.replaceChildren(leaderboardMessage('Chargement…'));
   leaderboardModal.hidden = false;
   document.getElementById('closeLeaderboardButton').focus();
+  loadFullLeaderboard();
+}
+async function loadFullLeaderboard() {
+  leaderboardFullEl.replaceChildren(leaderboardMessage('Chargement…'));
   try {
     const myIndex = renderLeaderboard(await fetchTopScores(LEADERBOARD_CONFIG.fullSize), [leaderboardFullEl]);
     leaderboardFullEl.children[myIndex]?.scrollIntoView({ block: 'center' });
@@ -393,6 +396,19 @@ async function openLeaderboardModal() {
     leaderboardFullEl.replaceChildren(leaderboardMessage('Classement indisponible pour le moment.'));
   }
 }
+function setLeaderboardDevice(device) {
+  leaderboardDevice = device;
+  document.querySelectorAll('.device-tabs button').forEach(button => {
+    const active = button.dataset.device === device;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+}
+document.querySelectorAll('.device-tabs button').forEach(button => button.addEventListener('click', () => {
+  setLeaderboardDevice(button.dataset.device);
+  refreshLeaderboard();
+  if (!leaderboardModal.hidden) loadFullLeaderboard();
+}));
 function closeLeaderboardModal() {
   if (leaderboardModal.hidden) return;
   leaderboardModal.hidden = true;
@@ -403,6 +419,7 @@ document.getElementById('leaderboardButton').addEventListener('click', openLeade
 document.getElementById('closeLeaderboardButton').addEventListener('click', closeLeaderboardModal);
 leaderboardModal.addEventListener('click', event => { if (event.target === leaderboardModal) closeLeaderboardModal(); });
 document.addEventListener('keydown', event => { if (event.key === 'Escape') closeLeaderboardModal(); });
+setLeaderboardDevice(leaderboardDevice);
 refreshLeaderboard();
 setInterval(() => { if (!game.running) refreshLeaderboard(); }, 60000);
 

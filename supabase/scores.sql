@@ -1,5 +1,5 @@
--- Leaderboard for Z'imtZ'imt Jump: one row per player (case-insensitive name) holding their best score,
--- tagged with the device ('pc' or 'mobile') that best score was made on.
+-- Leaderboard for Z'imtZ'imt Jump: one row per player (case-insensitive name) and device ('pc' or 'mobile')
+-- holding their best score, so PC and mobile have separate leaderboards.
 -- Run in Supabase: Dashboard > SQL Editor > New query > paste > Run. Safe to run again.
 
 create table if not exists public.scores (
@@ -16,13 +16,15 @@ alter table public.scores add column if not exists device text not null default 
 alter table public.scores drop constraint if exists scores_device_check;
 alter table public.scores add constraint scores_device_check check (device in ('pc', 'mobile'));
 
--- Merge duplicates left by earlier versions: keep each player's best (then oldest) score.
+-- Merge duplicates left by earlier versions: keep each player's best (then oldest) score per device.
 delete from public.scores duplicate
 using public.scores kept
-where lower(duplicate.name) = lower(kept.name)
+where lower(duplicate.name) = lower(kept.name) and duplicate.device = kept.device
   and (duplicate.score < kept.score or (duplicate.score = kept.score and duplicate.id > kept.id));
 
-create unique index if not exists scores_player_key on public.scores (lower(name));
+-- One row per player and device: PC and mobile have separate leaderboards.
+drop index if exists public.scores_player_key;
+create unique index if not exists scores_player_device_key on public.scores (lower(name), device);
 create index if not exists scores_score_idx on public.scores (score desc, created_at asc);
 
 -- Only way to write: keeps the higher of the stored and submitted score, returns the player's best.
@@ -39,13 +41,13 @@ declare
 begin
   insert into public.scores as existing (name, score, altitude, device)
   values (clean_name, p_score, p_altitude, p_device)
-  on conflict ((lower(name))) do update
+  on conflict ((lower(name)), device) do update
     set name = excluded.name, score = excluded.score, altitude = excluded.altitude, device = excluded.device, created_at = now()
     where excluded.score > existing.score
   returning score into best;
 
   if best is null then
-    select score into best from public.scores where lower(name) = lower(clean_name);
+    select score into best from public.scores where lower(name) = lower(clean_name) and device = p_device;
   end if;
   return best;
 end;
