@@ -146,6 +146,9 @@ function supabaseHeaders(extra = {}) {
   if (LEADERBOARD_CONFIG.supabaseKey.startsWith('eyJ')) headers.Authorization = `Bearer ${LEADERBOARD_CONFIG.supabaseKey}`;
   return headers;
 }
+const DEVICE_LABELS = { pc: { icon: '💻', title: 'Record fait sur PC' }, mobile: { icon: '📱', title: 'Record fait sur mobile' } };
+// Touch-first devices count as mobile; touchscreen laptops keep a fine primary pointer and stay 'pc'.
+function getDevice() { return navigator.maxTouchPoints > 0 && matchMedia('(pointer: coarse)').matches ? 'mobile' : 'pc'; }
 function normalizeName(name) { return name.trim().replace(/\s+/g, ' ').slice(0, 16); }
 function sameName(first, second) { return first.toLowerCase() === second.toLowerCase(); }
 function getPlayerName() { try { return localStorage.getItem(PLAYER_NAME_KEY) || ''; } catch { return ''; } }
@@ -153,7 +156,7 @@ function setPlayerName(name) { try { localStorage.setItem(PLAYER_NAME_KEY, name)
 function readLocalScores() { try { return JSON.parse(localStorage.getItem(LOCAL_SCORES_KEY)) || []; } catch { return []; } }
 async function fetchTopScores() {
   if (!isOnlineLeaderboard()) return readLocalScores().slice(0, LEADERBOARD_CONFIG.size);
-  const response = await fetch(`${LEADERBOARD_CONFIG.supabaseUrl}/rest/v1/${LEADERBOARD_CONFIG.table}?select=name,score&order=score.desc,created_at.asc&limit=${LEADERBOARD_CONFIG.size}`, { headers: supabaseHeaders() });
+  const response = await fetch(`${LEADERBOARD_CONFIG.supabaseUrl}/rest/v1/${LEADERBOARD_CONFIG.table}?select=name,score,device&order=score.desc,created_at.asc&limit=${LEADERBOARD_CONFIG.size}`, { headers: supabaseHeaders() });
   if (!response.ok) throw new Error(`Leaderboard HTTP ${response.status}`);
   return response.json();
 }
@@ -167,7 +170,7 @@ async function saveScore(entry) {
     localStorage.setItem(LOCAL_SCORES_KEY, JSON.stringify(updated));
     return entry.score;
   }
-  const response = await fetch(`${LEADERBOARD_CONFIG.supabaseUrl}/rest/v1/rpc/submit_score`, { method: 'POST', headers: supabaseHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ p_name: entry.name, p_score: entry.score, p_altitude: entry.altitude }) });
+  const response = await fetch(`${LEADERBOARD_CONFIG.supabaseUrl}/rest/v1/rpc/submit_score`, { method: 'POST', headers: supabaseHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ p_name: entry.name, p_score: entry.score, p_altitude: entry.altitude, p_device: entry.device }) });
   if (!response.ok) throw new Error(`Leaderboard HTTP ${response.status}`);
   return response.json();
 }
@@ -180,8 +183,10 @@ function renderLeaderboard(entries) {
     list.replaceChildren(...entries.map((entry, index) => {
       const item = document.createElement('li');
       const name = document.createElement('span'); name.className = 'leaderboard-name'; name.textContent = entry.name;
+      const device = DEVICE_LABELS[entry.device] || DEVICE_LABELS.pc;
+      const deviceIcon = document.createElement('span'); deviceIcon.className = 'leaderboard-device'; deviceIcon.textContent = device.icon; deviceIcon.title = device.title;
       const score = document.createElement('span'); score.className = 'leaderboard-score'; score.textContent = String(entry.score).padStart(5, '0');
-      item.append(name, score);
+      item.append(name, deviceIcon, score);
       if (index === myIndex) item.classList.add('is-me');
       return item;
     }));
@@ -224,7 +229,7 @@ async function submitPendingScore(name) {
   }
 }
 function openScoreForm() {
-  pendingScore = { score: Math.floor(game.score), altitude: Math.floor(game.altitude) };
+  pendingScore = { score: Math.floor(game.score), altitude: Math.floor(game.altitude), device: getDevice() };
   setScoreStatus('');
   const savedName = getPlayerName();
   if (savedName) submitPendingScore(savedName);

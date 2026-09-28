@@ -1,4 +1,5 @@
--- Leaderboard for Z'imtZ'imt Jump: one row per player (case-insensitive name) holding their best score.
+-- Leaderboard for Z'imtZ'imt Jump: one row per player (case-insensitive name) holding their best score,
+-- tagged with the device ('pc' or 'mobile') that best score was made on.
 -- Run in Supabase: Dashboard > SQL Editor > New query > paste > Run. Safe to run again.
 
 create table if not exists public.scores (
@@ -6,8 +7,14 @@ create table if not exists public.scores (
   name text not null check (char_length(btrim(name)) between 1 and 16),
   score integer not null check (score between 0 and 1000000),
   altitude integer not null default 0 check (altitude between 0 and 1000000),
+  device text not null default 'pc',
   created_at timestamptz not null default now()
 );
+
+-- Tables created before the device column existed.
+alter table public.scores add column if not exists device text not null default 'pc';
+alter table public.scores drop constraint if exists scores_device_check;
+alter table public.scores add constraint scores_device_check check (device in ('pc', 'mobile'));
 
 -- Merge duplicates left by earlier versions: keep each player's best (then oldest) score.
 delete from public.scores duplicate
@@ -19,7 +26,8 @@ create unique index if not exists scores_player_key on public.scores (lower(name
 create index if not exists scores_score_idx on public.scores (score desc, created_at asc);
 
 -- Only way to write: keeps the higher of the stored and submitted score, returns the player's best.
-create or replace function public.submit_score(p_name text, p_score integer, p_altitude integer)
+drop function if exists public.submit_score(text, integer, integer);
+create or replace function public.submit_score(p_name text, p_score integer, p_altitude integer, p_device text default 'pc')
 returns integer
 language plpgsql
 security definer
@@ -29,10 +37,10 @@ declare
   clean_name text := btrim(regexp_replace(p_name, '\s+', ' ', 'g'));
   best integer;
 begin
-  insert into public.scores as existing (name, score, altitude)
-  values (clean_name, p_score, p_altitude)
+  insert into public.scores as existing (name, score, altitude, device)
+  values (clean_name, p_score, p_altitude, p_device)
   on conflict ((lower(name))) do update
-    set name = excluded.name, score = excluded.score, altitude = excluded.altitude, created_at = now()
+    set name = excluded.name, score = excluded.score, altitude = excluded.altitude, device = excluded.device, created_at = now()
     where excluded.score > existing.score
   returning score into best;
 
@@ -52,5 +60,5 @@ drop policy if exists "Public insert" on public.scores;
 
 revoke insert, update, delete on public.scores from anon, authenticated;
 grant select on public.scores to anon;
-revoke execute on function public.submit_score(text, integer, integer) from public;
-grant execute on function public.submit_score(text, integer, integer) to anon;
+revoke execute on function public.submit_score(text, integer, integer, text) from public;
+grant execute on function public.submit_score(text, integer, integer, text) to anon;
