@@ -116,6 +116,9 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 5px; border: 1px soli
 .link-button:hover { color: var(--cyan); }
 .link-button[hidden] { display: none; }
 .secondary-button { border-color: var(--cyan); background: transparent; text-shadow: 0 0 6px var(--cyan); box-shadow: 0 0 12px var(--cyan-glow); }
+.final-score-label.is-record { color: var(--pink); text-shadow: 0 0 8px var(--pink-glow); }
+.over-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.ghost-button { border-color: var(--line); background: transparent; box-shadow: none; text-shadow: none; color: var(--muted); }
 .leaderboard-mini { display: none; width: min(300px, 100%); margin-bottom: 14px; text-align: left; }
 .pause-screen { background: rgba(0, 0, 26, .8); }
 .modal { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 26, .78); backdrop-filter: blur(4px); }

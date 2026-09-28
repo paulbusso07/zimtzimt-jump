@@ -50,11 +50,14 @@
           <li><img src="sprites/monster-classic.png" alt="" /><span title="Reste sur sa plateforme.">Classique</span></li>
           <li><img src="sprites/monster-jumper.png" alt="" /><span title="Saute de plateforme en plateforme.">Sauteur</span></li>
           <li><img src="sprites/monster-flying.png" alt="" /><span title="Traverse l'écran en volant.">Volant</span></li>
+          <li><img data-guide-icon="blackHole" alt="" /><span title="Impossible à abattre : contourne-le, il t'attire un peu.">Trou noir</span></li>
         </ul>
         <p class="monster-tip">Quand un monstre approche, ton zinzin tire droit vers le haut : place-toi dessous pour l’atteindre. Tu peux aussi lui retomber dessus, mais ne le touche surtout pas autrement !</p>
         <div class="panel-kicker monsters-kicker">Les bonus</div>
         <ul class="platform-guide monster-guide">
           <li><img src="sprites/jetpack.png" alt="" /><span title="Touche-le pour t'envoler très haut pendant quelques secondes.">Jetpack</span></li>
+          <li><img data-guide-icon="shield" alt="" /><span title="Encaisse un coup de monstre à ta place.">Bouclier</span></li>
+          <li><img data-guide-icon="springs" alt="" /><span title="Tes 6 prochains sauts sont des super sauts.">Ressorts</span></li>
         </ul>
       </aside>
 
@@ -74,7 +77,7 @@
           <div class="game-over hidden" id="gameOver">
             <div class="over-eyebrow" id="overReason">Signal perdu</div>
             <h2>Retour sur <span>Terre.</span></h2>
-            <div class="final-score-label">Score</div>
+            <div class="final-score-label" id="finalScoreLabel">Score</div>
             <div class="final-score" id="finalScore">00000</div>
             <div class="over-stats"><span>Altitude <b id="finalAltitude">0 m</b></span></div>
             <form class="score-form" id="scoreForm" autocomplete="off" hidden>
@@ -84,7 +87,10 @@
             <p class="score-status" id="scoreStatus"></p>
             <button class="link-button" type="button" id="changeNameButton" hidden>Pas toi ? Changer de nom</button>
             <ol class="leaderboard leaderboard-mini" id="leaderboardMini"></ol>
-            <button class="primary-button secondary-button" id="restartButton">Rejouer</button>
+            <div class="over-actions">
+              <button class="primary-button secondary-button" id="restartButton">Rejouer</button>
+              <button class="primary-button ghost-button" type="button" id="shareButton">Partager</button>
+            </div>
           </div>
           <div class="hud hidden" id="hud"><div class="hud-stat"><span>Score</span><strong id="score">00000</strong></div><div class="hud-stat altitude-stat"><span>Altitude</span><strong><i id="altitudeBar"></i><b id="altitude">0</b> m</strong></div><button class="pause-button" id="pauseButton" aria-label="Pause">Ⅱ</button></div>
         </div>

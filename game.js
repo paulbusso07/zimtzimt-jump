@@ -144,6 +144,21 @@ const MONSTER_CONFIG = {
 };
 // Jetpack power-up: sits on a main-path platform; touching it flies the player up at `speed` for `duration` s.
 const JETPACK_CONFIG = { startAltitude: 100, minSpacing: 2400, chance: .03, duration: 2.4, speed: 1150, ramp: 6, width: 28, height: 21, nozzles: [.17, .78] };
+// Code-drawn bonuses, placed like the jetpack. Shield: absorbs one monster hit, then `invulnerable` s of safety.
+// Springs: the next `jumps` landings launch like a spring platform (without the spring's monster protection).
+const ITEM_CONFIG = {
+  jetpack: JETPACK_CONFIG,
+  shield: { startAltitude: 250, minSpacing: 2600, chance: .04, width: 24, height: 24, invulnerable: 1.2 },
+  springs: { startAltitude: 180, minSpacing: 2000, chance: .05, width: 26, height: 20, jumps: 6 }
+};
+// Black holes can't be shot or stomped: touching the core swallows the player unless a jetpack or spring launch carries
+// them through. Platforms keep `clearance` px sideways and `verticalClearance` px up/down away, so a route always exists.
+const BLACK_HOLE_CONFIG = { startAltitude: 700, minSpacing: 1700, chance: .07, radius: 24, killRadius: 25, clearance: 34, verticalClearance: 130, pullRadius: 95, pull: 300, swallowDuration: .9 };
+// The camera climbs this many metres per pixel scrolled; the score is the altitude.
+const ALTITUDE_PER_PIXEL = .22;
+// Dashed lines at the player's record and at the top scores on this device, so passing someone shows in the climb.
+const MARKER_CONFIG = { leaderboardSize: 10 };
+const TOAST_DURATION = { small: 1.4, big: 2.4 };
 // Cut out of jetpack.png (flames removed: they're animated in code under the nozzles at `nozzles` × width).
 const jetpackSprite = new Image();
 jetpackSprite.src = 'sprites/jetpack.png';
@@ -291,7 +306,7 @@ function setPlayerName(name) { try { localStorage.setItem(PLAYER_NAME_KEY, name)
 function readLocalScores() { try { return JSON.parse(localStorage.getItem(LOCAL_SCORES_KEY)) || []; } catch { return []; } }
 async function fetchTopScores(limit = LEADERBOARD_CONFIG.size, device = leaderboardDevice) {
   if (!isOnlineLeaderboard()) return readLocalScores().filter(score => (score.device || 'pc') === device).slice(0, limit);
-  const response = await fetch(`${LEADERBOARD_CONFIG.supabaseUrl}/rest/v1/${LEADERBOARD_CONFIG.table}?select=name,score,device&device=eq.${device}&order=score.desc,created_at.asc&limit=${limit}`, { headers: supabaseHeaders() });
+  const response = await fetch(`${LEADERBOARD_CONFIG.supabaseUrl}/rest/v1/${LEADERBOARD_CONFIG.table}?select=name,score,altitude,device&device=eq.${device}&order=score.desc,created_at.asc&limit=${limit}`, { headers: supabaseHeaders() });
   if (!response.ok) throw new Error(`Leaderboard HTTP ${response.status}`);
   return response.json();
 }
@@ -438,7 +453,7 @@ function resetGame() {
   clearControls();
   game.score = 0; game.altitude = 0; game.cameraY = 0; game.lastTime = 0; game.paused = false;
   const basePlatform = { x: game.width / 2 - 62, y: game.height - 45, width: 124, height: 11, type: 'base', pulse: 0 };
-  game.player = { x: game.width / 2 - 17, y: basePlatform.y - 43, width: 34, height: 43, velocityY: PHYSICS.jumpVelocity, velocityX: 0, rotation: 0, squashTimer: 0 };
+  game.player = { x: game.width / 2 - 17, y: basePlatform.y - 43, width: 34, height: 43, velocityY: PHYSICS.jumpVelocity, velocityX: 0, rotation: 0, squashTimer: 0, shield: false, invulnerable: 0, springJumps: 0, swallowed: null, swallowTime: 0 };
   game.platforms = [basePlatform];
   game.particles = [];
   game.monsters = [];
@@ -447,7 +462,12 @@ function resetGame() {
   game.firing = false;
   game.items = [];
   game.droppedJetpacks = [];
-  game.lastJetpackWorldY = Infinity;
+  game.lastItemWorldY = Object.fromEntries(Object.keys(ITEM_CONFIG).map(kind => [kind, Infinity]));
+  game.hazards = [];
+  game.lastBlackHoleWorldY = Infinity;
+  game.toasts = [];
+  game.runId = (game.runId || 0) + 1;
+  loadRecordMarkers();
   game.season = 'space';
   game.seasonTransition = null;
   canvasWrap.classList.remove('season-pyramids');
@@ -485,11 +505,12 @@ function findPlatformX(from, y, width, forbidden) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const x = 18 + Math.random() * maxX;
     const overlapsForbidden = forbidden && x < forbidden.x + forbidden.width + 18 && x + width + 18 > forbidden.x;
-    if (!overlapsForbidden && isReachable(from, x, y, width)) return x;
+    if (!overlapsForbidden && !isNearBlackHole(x, y, width) && isReachable(from, x, y, width)) return x;
   }
   const reach = getHorizontalReach(getLandingTime(Math.max(0, from.y - y)));
   const direction = Math.random() < .5 ? -1 : 1;
-  return Math.max(18, Math.min(maxX, from.x + direction * Math.min(reach, game.width * .38)));
+  const candidates = [direction, -direction].map(side => Math.max(18, Math.min(maxX, from.x + side * Math.min(reach, game.width * .38))));
+  return candidates.find(x => !isNearBlackHole(x, y, width)) ?? candidates[0];
 }
 function choosePlatformType(onMainPath = false) {
   if (game.altitude < 30) return PLATFORM_TYPES.NORMAL;
@@ -525,9 +546,10 @@ function generatePlatforms() {
   while (highest > -game.height * PLATFORM_CONFIG.keepAboveScreen) {
     const nextY = highest - getVerticalGap();
     const primary = addPlatform(nextY, index, anchor, null, true);
-    maybeSpawnJetpack(primary);
+    maybeSpawnItem(primary);
     if (index % 3 === 1 || Math.random() < .28) addPlatform(nextY, index + 1000, anchor, primary);
     maybeSpawnMonster(nextY);
+    maybeSpawnBlackHole(nextY);
     anchor = primary;
     highest = nextY;
     index += 1;
@@ -548,7 +570,7 @@ function addMonsterPlatform(y) {
   const rowPlatforms = game.platforms.filter(platform => Math.abs(platform.y - y) < 24);
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const x = 18 + Math.random() * Math.max(0, game.width - width - 36);
-    if (rowPlatforms.every(platform => x + width + 26 < platform.x || x > platform.x + platform.width + 26)) {
+    if (!isNearBlackHole(x, y, width) && rowPlatforms.every(platform => x + width + 26 < platform.x || x > platform.x + platform.width + 26)) {
       const platform = { x, y, width, height: 10, type: PLATFORM_TYPES.NORMAL, pulse: 0, velocityX: 0, velocityY: 0, baseY: y, active: true, destroyed: false, breakTimer: 0 };
       game.platforms.push(platform);
       return platform;
@@ -706,6 +728,13 @@ function handleMonsterCollisions(previousBottom) {
       player.y = box.top - player.height;
       player.velocityY = MONSTER_CONFIG.stompVelocity;
       player.squashTimer = .16;
+    } else if (player.shield) {
+      player.shield = false;
+      player.invulnerable = ITEM_CONFIG.shield.invulnerable;
+      killMonster(monster);
+      burst(player.x + player.width / 2, player.y + player.height / 2, 'shield');
+      showToast('Bouclier brisé !', { color: '#00ffff' });
+      playTone(260, .2);
     } else {
       player.dead = true;
       player.velocityY = Math.min(player.velocityY, -220);
@@ -742,37 +771,191 @@ function drawMonster(monster) {
   context.restore();
 }
 
+function isNearBlackHole(x, y, width) {
+  const { radius, clearance, verticalClearance } = BLACK_HOLE_CONFIG;
+  return game.hazards.some(hole => Math.abs(hole.y - y) < verticalClearance && x < hole.x + radius + clearance && x + width > hole.x - radius - clearance);
+}
+// Sits between this row and the next one, in a column no nearby platform uses (later rows avoid it via isNearBlackHole).
+function maybeSpawnBlackHole(y) {
+  const { startAltitude, minSpacing, chance, radius, clearance, verticalClearance } = BLACK_HOLE_CONFIG;
+  if (game.altitude < startAltitude) return;
+  const worldY = y - game.cameraY;
+  if (game.lastBlackHoleWorldY - worldY < minSpacing || Math.random() >= chance) return;
+  const holeY = y - 40;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const x = radius + 12 + Math.random() * Math.max(0, game.width - 2 * (radius + 12));
+    const clear = game.platforms.every(platform => Math.abs(platform.y - holeY) >= verticalClearance || platform.x > x + radius + clearance || platform.x + platform.width < x - radius - clearance);
+    if (!clear) continue;
+    game.hazards.push({ x, y: holeY, spin: Math.random() * 6.28 });
+    game.lastBlackHoleWorldY = worldY;
+    return;
+  }
+}
+function updateBlackHoles(delta) {
+  game.hazards.forEach(hole => { hole.spin += delta * 2.4; });
+  game.hazards = game.hazards.filter(hole => hole.y < game.height + PLATFORM_CONFIG.removeBelowScreen);
+  const player = game.player;
+  if (player.dead || isPlayerProtected()) return;
+  const centerX = player.x + player.width / 2, centerY = player.y + player.height / 2;
+  for (const hole of game.hazards) {
+    const offsetX = hole.x - centerX, distance = Math.hypot(offsetX, hole.y - centerY);
+    if (distance < BLACK_HOLE_CONFIG.killRadius) {
+      player.dead = true;
+      player.swallowed = hole;
+      clearControls();
+      player.velocityY = 0;
+      playTone(90, .6);
+      return;
+    }
+    // A gentle sideways pull: noticeable, but slower than the player's own acceleration so it can be escaped.
+    if (distance < BLACK_HOLE_CONFIG.pullRadius) player.velocityX += Math.sign(offsetX) * BLACK_HOLE_CONFIG.pull * (1 - distance / BLACK_HOLE_CONFIG.pullRadius) * delta;
+  }
+}
+// The player spirals into the core, feet first, shrinking as drawPlayer reads swallowTime.
+function updateSwallowed(delta) {
+  const player = game.player;
+  const hole = player.swallowed;
+  player.swallowTime += delta;
+  hole.spin += delta * 6;
+  const pull = Math.min(1, delta * 6);
+  player.x += (hole.x - player.width / 2 - player.x) * pull;
+  player.y += (hole.y - player.height - player.y) * pull;
+  player.rotation += delta * 12;
+  updateParticles(delta);
+  if (player.swallowTime >= BLACK_HOLE_CONFIG.swallowDuration) endGame();
+}
+function paintBlackHole(ctx, x, y, radius, spin, pyramids) {
+  const [inner, outer] = pyramids ? ['#ffd36b', '#b8612a'] : ['#00ffff', '#ff00ff'];
+  ctx.save();
+  ctx.translate(x, y);
+  const halo = ctx.createRadialGradient(0, 0, radius * .5, 0, 0, radius * 2.2);
+  halo.addColorStop(0, pyramids ? 'rgba(90,40,10,.85)' : 'rgba(60,0,90,.85)');
+  halo.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = halo;
+  ctx.beginPath(); ctx.arc(0, 0, radius * 2.2, 0, Math.PI * 2); ctx.fill();
+  ctx.rotate(-spin);
+  ctx.lineCap = 'round';
+  ctx.lineWidth = Math.max(1.2, radius * .09);
+  ctx.globalAlpha = .75;
+  for (let arm = 0; arm < 4; arm += 1) {
+    ctx.strokeStyle = arm % 2 ? inner : outer;
+    ctx.beginPath();
+    for (let step = 0; step <= 16; step += 1) { const t = step / 16; const angle = arm * Math.PI / 2 + t * 3; const distance = radius * (1.9 - t * 1.3); ctx.lineTo(Math.cos(angle) * distance, Math.sin(angle) * distance); }
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  ctx.shadowColor = outer;
+  ctx.shadowBlur = radius * .6;
+  ctx.fillStyle = '#000';
+  ctx.beginPath(); ctx.arc(0, 0, radius * .6, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = inner;
+  ctx.lineWidth = Math.max(1, radius * .07);
+  ctx.stroke();
+  ctx.restore();
+}
+function drawBlackHoles() { game.hazards.forEach(hole => paintBlackHole(context, hole.x, hole.y, BLACK_HOLE_CONFIG.radius, hole.spin, isPyramidSeason())); }
+
+function paintShieldBubble(ctx, centerX, centerY, radius, pyramids, crest) {
+  const rim = pyramids ? '255,200,90' : '0,255,255';
+  ctx.save();
+  const fill = ctx.createRadialGradient(centerX - radius * .35, centerY - radius * .35, radius * .1, centerX, centerY, radius);
+  fill.addColorStop(0, 'rgba(255,255,255,.5)'); fill.addColorStop(.55, `rgba(${rim},.1)`); fill.addColorStop(1, `rgba(${rim},.35)`);
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = `rgba(${rim},.9)`;
+  ctx.lineWidth = Math.max(1.5, radius * .08);
+  ctx.shadowColor = `rgb(${rim})`;
+  ctx.shadowBlur = radius * .5;
+  ctx.beginPath(); ctx.arc(centerX, centerY, radius, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  if (crest) {
+    const size = radius * .5;
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = `rgba(${rim},.9)`;
+    ctx.beginPath();
+    ctx.moveTo(centerX, centerY - size); ctx.lineTo(centerX + size * .8, centerY - size * .6); ctx.lineTo(centerX + size * .7, centerY + size * .2);
+    ctx.quadraticCurveTo(centerX + size * .4, centerY + size * .8, centerX, centerY + size);
+    ctx.quadraticCurveTo(centerX - size * .4, centerY + size * .8, centerX - size * .7, centerY + size * .2);
+    ctx.lineTo(centerX - size * .8, centerY - size * .6); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+// Two coils topped with soles; also drawn under the player's feet while spring jumps remain.
+function paintSprings(ctx, x, y, width, height, pyramids) {
+  const accent = pyramids ? '#ffb347' : '#ff4dff';
+  const soleHeight = height * .3;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  [.27, .73].forEach(ratio => {
+    const centerX = x + width * ratio, coilWidth = width * .15, top = y + soleHeight, bottom = y + height;
+    ctx.strokeStyle = '#d9e3ff';
+    ctx.lineWidth = Math.max(1.3, width * .06);
+    ctx.beginPath();
+    ctx.moveTo(centerX - coilWidth, bottom);
+    for (let turn = 1; turn <= 6; turn += 1) ctx.lineTo(centerX + (turn % 2 ? coilWidth : -coilWidth), bottom - (bottom - top) * turn / 6);
+    ctx.stroke();
+    ctx.fillStyle = accent;
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 6;
+    ctx.beginPath(); ctx.roundRect(centerX - width * .2, y, width * .4, soleHeight, soleHeight * .45); ctx.fill();
+    ctx.shadowBlur = 0;
+  });
+  ctx.restore();
+}
+function drawWornShield() {
+  const player = game.player;
+  if (!player.shield || player.dead) return;
+  context.save();
+  context.globalAlpha = .55 + Math.sin(performance.now() / 180) * .1;
+  paintShieldBubble(context, player.x + player.width / 2, player.y + player.height / 2, 30, isPyramidSeason(), false);
+  context.restore();
+}
+function drawWornSprings() {
+  const player = game.player;
+  if (!player.springJumps || player.dead) return;
+  paintSprings(context, player.x + PLAYER_FEET.left - 2, player.y + player.height - 7, PLAYER_FEET.right - PLAYER_FEET.left + 4, 10, isPyramidSeason());
+}
+
 function getJetpackLook() {
   const pyramid = isPyramidSeason() && isImageReady(pyramidSprites.jetpack);
   const image = pyramid ? pyramidSprites.jetpack : jetpackSprite;
   const height = isImageReady(image) ? JETPACK_CONFIG.width * image.naturalHeight / image.naturalWidth : JETPACK_CONFIG.height;
   return { image, height, nozzles: pyramid ? PYRAMID_SEASON.jetpackNozzles : JETPACK_CONFIG.nozzles };
 }
-// World y (fixed as the camera scrolls) keeps jetpacks `minSpacing` apart even after one is used up.
-function maybeSpawnJetpack(platform) {
-  if (game.altitude < JETPACK_CONFIG.startAltitude || platform.type !== PLATFORM_TYPES.NORMAL) return;
+// World y (fixed as the camera scrolls) keeps each kind of bonus `minSpacing` apart even after one is used up.
+function maybeSpawnItem(platform) {
+  if (platform.type !== PLATFORM_TYPES.NORMAL) return;
   const worldY = platform.y - game.cameraY;
-  if (game.lastJetpackWorldY - worldY < JETPACK_CONFIG.minSpacing || Math.random() >= JETPACK_CONFIG.chance) return;
-  game.lastJetpackWorldY = worldY;
-  game.items.push({ platform, offset: (Math.random() - .5) * Math.max(0, platform.width - JETPACK_CONFIG.width - 12), phase: Math.random() * 6.28 });
+  const kind = Object.keys(ITEM_CONFIG).find(kind => {
+    const config = ITEM_CONFIG[kind];
+    return game.altitude >= config.startAltitude && game.lastItemWorldY[kind] - worldY >= config.minSpacing && Math.random() < config.chance;
+  });
+  if (!kind) return;
+  game.lastItemWorldY[kind] = worldY;
+  game.items.push({ kind, platform, offset: (Math.random() - .5) * Math.max(0, platform.width - ITEM_CONFIG[kind].width - 12), phase: Math.random() * 6.28 });
 }
 function getItemBox(item) {
-  const x = item.platform.x + item.platform.width / 2 + item.offset - JETPACK_CONFIG.width / 2;
-  return { x, y: item.platform.y - JETPACK_CONFIG.height + 1, width: JETPACK_CONFIG.width, height: JETPACK_CONFIG.height };
+  const { width, height } = ITEM_CONFIG[item.kind];
+  const x = item.platform.x + item.platform.width / 2 + item.offset - width / 2;
+  return { x, y: item.platform.y - height + 1, width, height };
 }
-function updateJetpack(delta) {
+function pickUpItem(item) {
+  const player = game.player;
+  game.items = game.items.filter(other => other !== item);
+  if (item.kind === 'jetpack') { player.jetpackTime = JETPACK_CONFIG.duration; playTone(300, .3); }
+  if (item.kind === 'shield') { player.shield = true; showToast('Bouclier activé', { color: '#00ffff' }); playTone(700, .18); }
+  if (item.kind === 'springs') { player.springJumps = ITEM_CONFIG.springs.jumps; showToast(`Chaussures à ressort ×${ITEM_CONFIG.springs.jumps}`, { color: '#ff4dff' }); playTone(480, .18); }
+}
+function updateItems(delta) {
   const player = game.player;
   game.items = game.items.filter(item => game.platforms.includes(item.platform));
-  if (!player.dead && !player.jetpackTime) {
+  if (!player.dead) {
+    // A jetpack can't be stacked on a running one, nor a shield on a shield; springs just refill.
     const pickedUp = game.items.find(item => {
+      if ((item.kind === 'jetpack' && player.jetpackTime) || (item.kind === 'shield' && player.shield)) return false;
       const box = getItemBox(item);
       return player.x + PLAYER_FEET.right > box.x && player.x + PLAYER_FEET.left < box.x + box.width && player.y + player.height > box.y && player.y + 8 < box.y + box.height;
     });
-    if (pickedUp) {
-      game.items = game.items.filter(item => item !== pickedUp);
-      player.jetpackTime = JETPACK_CONFIG.duration;
-      playTone(300, .3);
-    }
+    if (pickedUp) pickUpItem(pickedUp);
   }
   game.items.forEach(item => { item.phase += delta * 4; });
   game.droppedJetpacks.forEach(jetpack => { jetpack.velocityY += PHYSICS.gravity * delta; jetpack.x += jetpack.velocityX * delta; jetpack.y += jetpack.velocityY * delta; jetpack.rotation += delta * 7; });
@@ -804,16 +987,20 @@ function drawJetpackFlame(x, y, nozzles) {
 }
 function drawItems() {
   const look = getJetpackLook();
-  if (!isImageReady(look.image)) return;
+  const pyramids = isPyramidSeason();
   game.items.forEach(item => {
     const box = getItemBox(item);
+    const bob = Math.sin(item.phase) * 1.5;
+    if (item.kind === 'shield') { paintShieldBubble(context, box.x + box.width / 2, box.y + box.height / 2 - 3 + bob, box.width / 2, pyramids, true); return; }
+    if (item.kind === 'springs') { paintSprings(context, box.x, box.y - 2 + bob, box.width, box.height, pyramids); return; }
+    if (!isImageReady(look.image)) return;
     context.save();
     context.shadowColor = isPyramidSeason() ? '#ffd36b' : '#33ffff';
     context.shadowBlur = 10 + Math.sin(item.phase) * 4;
     context.drawImage(look.image, box.x, box.y + box.height - look.height - 2 + Math.sin(item.phase) * 1.5, box.width, look.height);
     context.restore();
   });
-  game.droppedJetpacks.forEach(jetpack => {
+  if (isImageReady(look.image)) game.droppedJetpacks.forEach(jetpack => {
     context.save();
     context.translate(jetpack.x + JETPACK_CONFIG.width / 2, jetpack.y + JETPACK_CONFIG.height / 2);
     context.rotate(jetpack.rotation);
@@ -822,8 +1009,9 @@ function drawItems() {
     context.restore();
   });
 }
-// A jetpack flight or a spring/trampoline launch makes the player pass through monsters until the apex.
-function isPlayerProtected() { return Boolean(game.player.jetpackTime || game.player.boosted); }
+// A jetpack flight or a spring/trampoline launch makes the player pass through monsters until the apex,
+// as does the short grace period after a shield breaks.
+function isPlayerProtected() { return Boolean(game.player.jetpackTime || game.player.boosted || game.player.invulnerable > 0); }
 function drawShield() {
   if (!isPlayerProtected() || game.player.dead) return;
   const player = game.player;
@@ -853,7 +1041,135 @@ function startGame() {
   requestTiltPermission();
   resizeCanvas(); resetGame(); game.running = true; startScreen.classList.add('hidden'); gameOverScreen.classList.add('hidden'); pauseScreen.classList.add('hidden'); hud.classList.remove('hidden'); canvas.focus(); requestAnimationFrame(loop); playTone(220, .08);
 }
-function endGame() { game.running = false; hud.classList.add('hidden'); document.getElementById('overReason').textContent = game.player.dead ? 'Attaqué par un monstre' : 'Signal perdu'; gameOverScreen.classList.remove('hidden'); document.getElementById('finalScore').textContent = String(Math.floor(game.score)).padStart(5, '0'); document.getElementById('finalAltitude').textContent = `${Math.floor(game.altitude)} m`; if (game.score > bestScore) { bestScore = Math.floor(game.score); localStorage.setItem(bestScoreKey, bestScore); bestScoreEl.textContent = String(bestScore).padStart(5, '0'); } openScoreForm(); playTone(110, .2); }
+function endGame() {
+  game.running = false; hud.classList.add('hidden');
+  document.getElementById('overReason').textContent = game.player.swallowed ? 'Aspiré par un trou noir' : game.player.dead ? 'Attaqué par un monstre' : 'Signal perdu';
+  gameOverScreen.classList.remove('hidden');
+  document.getElementById('finalScore').textContent = String(Math.floor(game.score)).padStart(5, '0');
+  document.getElementById('finalAltitude').textContent = `${Math.floor(game.altitude)} m`;
+  const isNewRecord = bestScore > 0 && Math.floor(game.score) > bestScore;
+  document.getElementById('finalScoreLabel').textContent = isNewRecord ? 'Nouveau record !' : 'Score';
+  document.getElementById('finalScoreLabel').classList.toggle('is-record', isNewRecord);
+  if (game.score > bestScore) { bestScore = Math.floor(game.score); localStorage.setItem(bestScoreKey, bestScore); bestScoreEl.textContent = String(bestScore).padStart(5, '0'); }
+  shareButton.textContent = 'Partager';
+  openScoreForm(); playTone(110, .2);
+}
+
+function loadRecordMarkers() {
+  game.markers = bestScore > 0 ? [{ altitude: bestScore, label: 'Ton record', mine: true, passed: false }] : [];
+  const runId = game.runId;
+  fetchTopScores(MARKER_CONFIG.leaderboardSize, getDevice()).then(entries => {
+    if (game.runId !== runId) return;
+    const myName = getPlayerName();
+    entries.forEach((entry, index) => {
+      const altitude = entry.altitude || entry.score;
+      if (altitude <= 0 || (myName && sameName(entry.name, myName))) return;
+      // Scores already beaten by the time the list arrives shouldn't all pop at once.
+      game.markers.push({ altitude, label: `n°${index + 1} ${entry.name}`, name: entry.name, rank: index + 1, passed: game.altitude >= altitude });
+    });
+  }).catch(() => {});
+}
+function updateMarkers() {
+  game.markers.forEach(marker => {
+    if (marker.passed || game.altitude < marker.altitude) return;
+    marker.passed = true;
+    if (marker.mine) celebrateRecord();
+    else if (marker.rank === 1) { showToast('Tu prends la 1re place !', { big: true, color: '#ffd84d' }); playTone(988, .2); }
+    else { showToast(`${marker.name} dépassé !`, { color: '#00ffff' }); playTone(740, .1); }
+  });
+}
+function markerScreenY(marker) { return game.height * .45 - (marker.altitude - game.altitude) / ALTITUDE_PER_PIXEL; }
+function drawMarkers() {
+  game.markers.forEach(marker => {
+    const y = markerScreenY(marker);
+    if (y < -4 || y > game.height + 4) return;
+    const color = marker.mine ? '#ff4dff' : '#00ffff';
+    const label = `${marker.label} · ${marker.altitude} m`;
+    context.save();
+    context.globalAlpha = marker.passed ? .35 : .85;
+    context.strokeStyle = color;
+    context.lineWidth = 1.5;
+    context.setLineDash([8, 6]);
+    context.beginPath(); context.moveTo(0, y); context.lineTo(game.width, y); context.stroke();
+    context.setLineDash([]);
+    context.font = '700 10px Orbitron, sans-serif';
+    context.textAlign = 'right';
+    context.textBaseline = 'bottom';
+    context.lineWidth = 3;
+    context.strokeStyle = 'rgba(0,0,26,.8)';
+    context.strokeText(label, game.width - 8, y - 4);
+    context.fillStyle = color;
+    context.fillText(label, game.width - 8, y - 4);
+    context.restore();
+  });
+}
+function celebrateRecord() {
+  showToast('NOUVEAU RECORD !', { big: true, color: '#ff4dff' });
+  const player = game.player;
+  const colors = ['#ff4dff', '#00ffff', '#8cff3a', '#ffd84d'];
+  for (let index = 0; index < 40; index += 1) {
+    const angle = -Math.PI / 2 + (Math.random() - .5) * 2.4, speed = 160 + Math.random() * 260;
+    game.particles.push({ x: player.x + player.width / 2, y: player.y + player.height / 2, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: .6 + Math.random() * .6, color: colors[index % colors.length], size: 2 + Math.random() * 3 });
+  }
+  [523, 659, 784, 1047].forEach((frequency, index) => setTimeout(() => playTone(frequency, .14), index * 90));
+}
+// Toasts queue up so a pickup message never hides the record banner.
+function showToast(text, { big = false, color = '#00ffff' } = {}) { game.toasts.push({ text, big, color, time: 0 }); }
+function updateToasts(delta) {
+  const toast = game.toasts[0];
+  if (toast && (toast.time += delta) >= (toast.big ? TOAST_DURATION.big : TOAST_DURATION.small)) game.toasts.shift();
+}
+function drawToast() {
+  const toast = game.toasts[0];
+  if (!toast) return;
+  const progress = toast.time / (toast.big ? TOAST_DURATION.big : TOAST_DURATION.small);
+  const pop = toast.big ? 1 + .35 * Math.max(0, 1 - progress / .12) : 1;
+  context.save();
+  context.globalAlpha = Math.max(0, Math.min(1, progress / .1, (1 - progress) / .2));
+  context.translate(game.width / 2, game.height * (toast.big ? .27 : .2));
+  context.scale(pop, pop);
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.font = toast.big ? `900 ${Math.round(Math.min(32, game.width * .07))}px Orbitron, sans-serif` : `700 ${Math.round(Math.min(15, game.width * .038))}px Orbitron, sans-serif`;
+  context.lineWidth = toast.big ? 6 : 4;
+  context.strokeStyle = 'rgba(0,0,26,.85)';
+  context.strokeText(toast.text, 0, 0);
+  context.shadowColor = toast.color;
+  context.shadowBlur = 14;
+  context.fillStyle = toast.big ? '#ffffff' : toast.color;
+  context.fillText(toast.text, 0, 0);
+  context.restore();
+}
+
+const shareButton = document.getElementById('shareButton');
+async function shareScore() {
+  const text = `J'ai atteint ${Math.floor(game.altitude)} m sur Z'imtZ'imt Jump ! Tu peux faire mieux ?`;
+  const url = location.href.split('#')[0];
+  try {
+    if (navigator.share) { await navigator.share({ title: "Z'imtZ'imt Jump", text, url }); return; }
+    await navigator.clipboard.writeText(`${text} ${url}`);
+    shareButton.textContent = 'Lien copié !';
+  } catch (error) {
+    if (error.name !== 'AbortError') shareButton.textContent = 'Partage impossible';
+  }
+}
+shareButton.addEventListener('click', shareScore);
+
+// The side-panel guide shows the code-drawn bonuses and the black hole with the same art as in game.
+function paintGuideIcons() {
+  const painters = {
+    shield: ctx => paintShieldBubble(ctx, 40, 26, 22, false, true),
+    springs: ctx => paintSprings(ctx, 20, 4, 40, 44, false),
+    blackHole: ctx => paintBlackHole(ctx, 40, 26, 11, .6, false)
+  };
+  document.querySelectorAll('[data-guide-icon]').forEach(image => {
+    const iconCanvas = document.createElement('canvas');
+    iconCanvas.width = 80; iconCanvas.height = 52;
+    painters[image.dataset.guideIcon](iconCanvas.getContext('2d'));
+    image.src = iconCanvas.toDataURL();
+  });
+}
+paintGuideIcons();
 function togglePause() { if (!game.running) return; clearControls(); game.paused = !game.paused; pauseScreen.classList.toggle('hidden', !game.paused); if (!game.paused) { game.lastTime = performance.now(); requestAnimationFrame(loop); } }
 
 function loop(timestamp) {
@@ -881,6 +1197,7 @@ function handlePlatformLanding(platform) {
   player.y = platform.y - player.height;
   if (platform.type === PLATFORM_TYPES.BOUNCY) player.velocityY = SPECIAL_PLATFORM_CONFIG.bouncy.jumpVelocity;
   else if (platform.type === PLATFORM_TYPES.TRAMPOLINE) { player.velocityY = SPECIAL_PLATFORM_CONFIG.trampoline.jumpVelocity; platform.active = false; platform.breakTimer = SPECIAL_PLATFORM_CONFIG.trampoline.disappearDelay; }
+  else if (player.springJumps > 0) { player.velocityY = SPECIAL_PLATFORM_CONFIG.bouncy.jumpVelocity; player.springJumps -= 1; }
   else player.velocityY = PHYSICS.jumpVelocity;
   if (platform.type === PLATFORM_TYPES.BREAKABLE) platform.breakTimer = SPECIAL_PLATFORM_CONFIG.breakable.breakDelay;
   if (platform.type === PLATFORM_TYPES.DISAPPEARING) { platform.active = false; platform.breakTimer = SPECIAL_PLATFORM_CONFIG.disappearing.disappearDelay; }
@@ -893,9 +1210,12 @@ function handlePlatformLanding(platform) {
 }
 function update(delta) {
   const player = game.player;
+  updateToasts(delta);
+  if (player.swallowed) { updateSwallowed(delta); return; }
   updateSpecialPlatforms(delta);
   updateMonsters(delta);
   player.squashTimer = Math.max(0, player.squashTimer - delta);
+  player.invulnerable = Math.max(0, player.invulnerable - delta);
   const movingLeft = keys.left === true;
   const movingRight = keys.right === true;
   const inputDirection = player.dead || movingLeft === movingRight ? 0 : movingLeft ? -1 : 1;
@@ -919,32 +1239,36 @@ function update(delta) {
     handlePlatformLanding(landedPlatform);
   }
   if (!player.dead && !isPlayerProtected()) handleMonsterCollisions(previousBottom);
-  updateJetpack(delta);
+  updateBlackHoles(delta);
+  updateItems(delta);
   updateShooting(delta);
   if (player.y < game.height * .45 && !player.dead) {
     const shift = game.height * .45 - player.y;
     player.y = game.height * .45;
     game.cameraY += shift;
-    game.altitude += shift * .22;
+    game.altitude += shift * ALTITUDE_PER_PIXEL;
     // The score is the altitude reached, in metres.
     game.score = game.altitude;
     game.platforms.forEach(platform => { platform.y += shift; if (platform.type === PLATFORM_TYPES.MOVING_VERTICAL) platform.baseY += shift; });
     game.monsters.forEach(monster => { monster.y += shift; monster.baseY += shift; });
     game.projectiles.forEach(projectile => { projectile.y += shift; });
     game.droppedJetpacks.forEach(jetpack => { jetpack.y += shift; });
+    game.hazards.forEach(hole => { hole.y += shift; });
+    updateMarkers();
   }
   game.platforms = game.platforms.filter(platform => !platform.destroyed && platform.y < game.height + PLATFORM_CONFIG.removeBelowScreen);
   generatePlatforms();
-  game.particles.forEach(particle => { particle.x += particle.vx * delta; particle.y += particle.vy * delta; particle.life -= delta; particle.vy += 80 * delta; }); game.particles = game.particles.filter(particle => particle.life > 0);
+  updateParticles(delta);
   player.rotation += player.dead ? delta * 5 : player.velocityX * delta * .002;
   updateSeason(delta);
   if (player.y > game.height + 120) endGame();
   updateHud();
 }
 function updateHud() { document.getElementById('score').textContent = String(Math.floor(game.score)).padStart(5, '0'); document.getElementById('altitude').textContent = Math.floor(game.altitude); document.getElementById('altitudeBar').style.transform = `scaleX(${Math.min(game.altitude / 900, 1)})`; }
-function burst(x, y, type) { const color = type === 'monster' ? '#ff00ff' : type === PLATFORM_TYPES.DISAPPEARING || type === PLATFORM_TYPES.TRAMPOLINE ? '#00ffff' : '#8cff3a'; for (let index = 0; index < 8; index += 1) game.particles.push({ x, y, vx: (Math.random() - .5) * 150, vy: (Math.random() - .8) * 180, life: .3 + Math.random() * .35, color, size: 2 + Math.random() * 3 }); }
+function updateParticles(delta) { game.particles.forEach(particle => { particle.x += particle.vx * delta; particle.y += particle.vy * delta; particle.life -= delta; particle.vy += 80 * delta; }); game.particles = game.particles.filter(particle => particle.life > 0); }
+function burst(x, y, type) { const color = type === 'monster' ? '#ff00ff' : type === 'shield' ? '#b8ffff' : type === PLATFORM_TYPES.DISAPPEARING || type === PLATFORM_TYPES.TRAMPOLINE ? '#00ffff' : '#8cff3a'; for (let index = 0; index < 8; index += 1) game.particles.push({ x, y, vx: (Math.random() - .5) * 150, vy: (Math.random() - .8) * 180, life: .3 + Math.random() * .35, color, size: 2 + Math.random() * 3 }); }
 
-function draw() { context.clearRect(0, 0, game.width, game.height); drawBackground(); game.platforms.forEach(drawPlatform); drawItems(); game.monsters.forEach(drawMonster); game.projectiles.forEach(drawProjectile); game.particles.forEach(drawParticle); drawShield(); drawWornJetpack(); drawPlayer(); drawMuzzleFlash(); drawSeasonTransition(); }
+function draw() { context.clearRect(0, 0, game.width, game.height); drawBackground(); drawMarkers(); drawBlackHoles(); game.platforms.forEach(drawPlatform); drawItems(); game.monsters.forEach(drawMonster); game.projectiles.forEach(drawProjectile); game.particles.forEach(drawParticle); drawShield(); drawWornJetpack(); drawWornSprings(); drawPlayer(); drawWornShield(); drawMuzzleFlash(); drawSeasonTransition(); drawToast(); }
 function drawMuzzleFlash() {
   const player = game.player;
   if (!player.shootTimer) return;
@@ -1097,7 +1421,7 @@ function drawPlatform(platform) {
   }
   context.restore();
 }
-function drawPlayer() { const player = game.player; const squash = player.squashTimer > 0 ? player.squashTimer / .16 : 0; const scaleX = 1 + squash * .13; const scaleY = 1 - squash * .2; context.save(); context.translate(player.x + player.width / 2, player.y + player.height); context.rotate(player.rotation); context.scale(scaleX, scaleY); context.fillStyle = 'rgba(0,0,0,.3)'; context.beginPath(); context.ellipse(0, 0, 13, 2.5, 0, 0, Math.PI * 2); context.fill(); const pyramidPlayer = isPyramidSeason() && isImageReady(pyramidSprites.player) ? pyramidSprites.player : null; if (pyramidPlayer) { const height = PYRAMID_SEASON.player.height; const width = height * pyramidPlayer.naturalWidth / pyramidPlayer.naturalHeight; context.drawImage(pyramidPlayer, -width / 2, -height + 1, width, height); } else if (playerSprite) { context.drawImage(playerSprite, -16, -PLAYER_SPRITE_FEET, 32, 36); } else { context.translate(0, -player.height / 2); context.fillStyle = '#d8f546'; context.beginPath(); context.ellipse(0, -2, 16, 18, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#10141d'; context.beginPath(); context.ellipse(0, 1, 13, 10, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#f1eee5'; context.beginPath(); context.arc(-5, -1, 2.5, 0, Math.PI * 2); context.arc(5, -1, 2.5, 0, Math.PI * 2); context.fill(); } context.restore(); }
+function drawPlayer() { const player = game.player; const squash = player.squashTimer > 0 ? player.squashTimer / .16 : 0; const scaleX = 1 + squash * .13; const scaleY = 1 - squash * .2; context.save(); context.translate(player.x + player.width / 2, player.y + player.height); context.rotate(player.rotation); const shrink = player.swallowed ? Math.max(0, 1 - player.swallowTime / BLACK_HOLE_CONFIG.swallowDuration) : 1; context.scale(scaleX * shrink, scaleY * shrink); context.fillStyle = 'rgba(0,0,0,.3)'; context.beginPath(); context.ellipse(0, 0, 13, 2.5, 0, 0, Math.PI * 2); context.fill(); const pyramidPlayer = isPyramidSeason() && isImageReady(pyramidSprites.player) ? pyramidSprites.player : null; if (pyramidPlayer) { const height = PYRAMID_SEASON.player.height; const width = height * pyramidPlayer.naturalWidth / pyramidPlayer.naturalHeight; context.drawImage(pyramidPlayer, -width / 2, -height + 1, width, height); } else if (playerSprite) { context.drawImage(playerSprite, -16, -PLAYER_SPRITE_FEET, 32, 36); } else { context.translate(0, -player.height / 2); context.fillStyle = '#d8f546'; context.beginPath(); context.ellipse(0, -2, 16, 18, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#10141d'; context.beginPath(); context.ellipse(0, 1, 13, 10, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#f1eee5'; context.beginPath(); context.arc(-5, -1, 2.5, 0, Math.PI * 2); context.arc(5, -1, 2.5, 0, Math.PI * 2); context.fill(); } context.restore(); }
 function drawParticle(particle) { context.globalAlpha = Math.max(0, particle.life * 2); context.fillStyle = particle.color; context.fillRect(particle.x, particle.y, particle.size, particle.size); context.globalAlpha = 1; }
 
 function playTone(frequency, duration) { if (!game.audio) game.audio = new (window.AudioContext || window.webkitAudioContext)(); const oscillator = game.audio.createOscillator(); const gain = game.audio.createGain(); oscillator.frequency.value = frequency; oscillator.type = 'square'; gain.gain.setValueAtTime(.025, game.audio.currentTime); gain.gain.exponentialRampToValueAtTime(.001, game.audio.currentTime + duration); oscillator.connect(gain); gain.connect(game.audio.destination); oscillator.start(); oscillator.stop(game.audio.currentTime + duration); }
