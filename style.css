@@ -80,6 +80,7 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 5px; border: 1px soli
 .canvas-wrap input { -webkit-user-select: text; user-select: text; }
 .canvas-wrap { transition: border-color 1.2s ease, box-shadow 1.2s ease; }
 .canvas-wrap.season-pyramids { border-color: #f0b54a; box-shadow: 0 0 18px rgba(255, 190, 90, .55), 0 0 50px rgba(255, 160, 80, .2), inset 0 0 20px rgba(255, 190, 90, .25); }
+.canvas-wrap.season-ice { border-color: #9fe3ff; box-shadow: 0 0 18px rgba(150, 220, 255, .6), 0 0 50px rgba(120, 200, 255, .2), inset 0 0 20px rgba(170, 235, 255, .25); }
 
 .hud { position: absolute; inset: 0 0 auto; z-index: 3; display: flex; align-items: start; justify-content: space-between; padding: 14px 16px 24px; background: linear-gradient(rgba(0, 0, 26, .85), transparent); }
 .hud-stat { display: flex; flex-direction: column; gap: 3px; font: 700 8px var(--font-ui); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }

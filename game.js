@@ -172,76 +172,104 @@ Object.values(MONSTER_TYPES).forEach(type => {
   image.onload = () => { monsterSprites[type] = image; };
   image.src = `sprites/monster-${type}.png`;
 });
-// Seasons only change the look: past `altitude` metres the pyramid art (sprites/pyramids/) replaces the space art.
-const PYRAMID_SEASON = {
-  altitude: 3000,
-  // Pyramid platform art is taller than the space set; its height is squashed by this factor.
-  platformSquash: .6,
-  player: { height: 44 },
-  jetpackNozzles: [.2, .8]
+// Seasons only change the look. Every SEASON_LENGTH metres a new numbered season starts, cycling through
+// SEASON_ORDER with no end: season 1 is space, 2 the pyramids, 3 the ice age, 4 space again, and so on.
+const SEASON_LENGTH = 1000;
+const SEASON_ORDER = ['space', 'pyramids', 'ice'];
+// `folder`: sprites/<folder>/ replaces the space art. Platform art taller than the space set is squashed by `platformSquash`.
+// `storm`: the transition sweeping in the season (tint, streak colour, flash, how steeply streaks fall, burst colours).
+const SEASON_THEMES = {
+  space: {
+    title: 'Retour dans l’Espace',
+    rim: '0,255,255', projectile: ['#00ffff', '#b8ffff'], itemGlow: '#33ffff', springs: '#ff4dff', blackHole: ['#00ffff', '#ff00ff', 'rgba(60,0,90,.85)'],
+    storm: { tint: '40,0,90', streak: '#b8ffff', flash: '200,255,255', drift: 0, burst: ['#00ffff', '#ff4dff'], tone: 523 },
+    titleColors: { kicker: '#b8ffff', stroke: '#5a0a7a', fill: '#ffffff', shadow: 'rgba(255,0,255,.9)' }
+  },
+  pyramids: {
+    title: 'Les Pyramides', folder: 'pyramids', platformSquash: .6, playerHeight: 44, jetpackNozzles: [.2, .8], platformShadow: 'rgba(70,30,10,.55)',
+    rim: '255,200,90', projectile: ['#ffb347', '#ffe7a3'], itemGlow: '#ffd36b', springs: '#ffb347', blackHole: ['#ffd36b', '#b8612a', 'rgba(90,40,10,.85)'],
+    storm: { tint: '214,164,98', streak: '#ffe2a8', flash: '255,240,200', drift: .12, burst: ['#ffd36b', '#e7ba74'], tone: 660 },
+    titleColors: { kicker: '#5a2a0c', stroke: '#7a3e12', fill: '#fff1c4', shadow: 'rgba(255,170,60,.9)' }
+  },
+  ice: {
+    title: 'L’Ère glaciaire', folder: 'ice', platformSquash: .8, playerHeight: 46, jetpackNozzles: [.15, .75], platformShadow: 'rgba(5,25,60,.6)',
+    rim: '170,235,255', projectile: ['#7fd8ff', '#ffffff'], itemGlow: '#bff0ff', springs: '#7fd8ff', blackHole: ['#e8fbff', '#3a8dff', 'rgba(5,30,70,.85)'],
+    storm: { tint: '205,232,255', streak: '#ffffff', flash: '235,248,255', drift: .45, burst: ['#ffffff', '#bff0ff'], tone: 784 },
+    titleColors: { kicker: '#0d3050', stroke: '#1d4f7a', fill: '#eefaff', shadow: 'rgba(120,200,255,.9)' }
+  }
 };
 const SEASON_TRANSITION = { duration: 3.2, swapAt: .45, streaks: 110 };
 function loadImage(src) { const image = new Image(); image.src = src; return image; }
 function isImageReady(image) { return Boolean(image && image.complete && image.naturalWidth > 0); }
-const pyramidSprites = {
-  platforms: Object.fromEntries(['normal', 'moving', 'movingVertical', 'breakable', 'disappearing', 'small', 'bouncy', 'trampoline'].map(type => [type, loadImage(`sprites/pyramids/${type}.png`)])),
-  monsters: Object.fromEntries(Object.values(MONSTER_TYPES).map(type => [type, loadImage(`sprites/pyramids/monster-${type}.png`)])),
-  player: loadImage('sprites/pyramids/player.png'),
-  jetpack: loadImage('sprites/pyramids/jetpack.png')
-};
-function isPyramidSeason() { return game.season === 'pyramids'; }
-function newSandStreak(anywhere) {
+const seasonSprites = Object.fromEntries(Object.entries(SEASON_THEMES).filter(([, theme]) => theme.folder).map(([key, { folder }]) => [key, {
+  platforms: Object.fromEntries(['normal', 'moving', 'movingVertical', 'breakable', 'disappearing', 'small', 'bouncy', 'trampoline'].map(type => [type, loadImage(`sprites/${folder}/${type}.png`)])),
+  monsters: Object.fromEntries(Object.values(MONSTER_TYPES).map(type => [type, loadImage(`sprites/${folder}/monster-${type}.png`)])),
+  player: loadImage(`sprites/${folder}/player.png`),
+  jetpack: loadImage(`sprites/${folder}/jetpack.png`)
+}]));
+function seasonThemeAt(index) { return SEASON_ORDER[index % SEASON_ORDER.length]; }
+function currentTheme() { return SEASON_THEMES[game.season]; }
+function currentSprites() { return seasonSprites[game.season] || null; }
+function newStormStreak(anywhere) {
   return { x: anywhere ? Math.random() * game.width : -Math.random() * 160, y: Math.random() * game.height, length: 30 + Math.random() * 110, speed: 520 + Math.random() * 760, thickness: 1 + Math.random() * 2.5, alpha: .25 + Math.random() * .55 };
 }
-function startSeasonTransition() {
-  game.seasonTransition = { time: 0, swapped: false, streaks: Array.from({ length: SEASON_TRANSITION.streaks }, () => newSandStreak(true)) };
+function startSeasonTransition(index) {
+  game.seasonTransition = { time: 0, swapped: false, index, from: game.season, to: seasonThemeAt(index), streaks: Array.from({ length: SEASON_TRANSITION.streaks }, () => newStormStreak(true)) };
   playTone(392, .3);
 }
-// A sandstorm sweeps the screen; the art swaps at its peak (`swapAt`), hidden behind a golden flash.
+function setSeasonClass(theme) {
+  SEASON_ORDER.forEach(key => canvasWrap.classList.toggle(`season-${key}`, key === theme && key !== 'space'));
+}
+// A storm in the next season's colours sweeps the screen; the art swaps at its peak (`swapAt`), hidden behind a flash.
 function updateSeason(delta) {
-  if (!game.seasonTransition && !isPyramidSeason() && game.altitude >= PYRAMID_SEASON.altitude) startSeasonTransition();
+  if (!game.seasonTransition && Math.floor(game.altitude / SEASON_LENGTH) > game.seasonIndex) startSeasonTransition(game.seasonIndex + 1);
   const transition = game.seasonTransition;
   if (!transition) return;
+  const storm = SEASON_THEMES[transition.to].storm;
   transition.time += delta;
   transition.streaks.forEach(streak => {
     streak.x += streak.speed * delta;
-    streak.y += streak.speed * .12 * delta;
-    if (streak.x - streak.length > game.width || streak.y > game.height + 20) Object.assign(streak, newSandStreak(false));
+    streak.y += streak.speed * storm.drift * delta;
+    // Steep blizzard streaks restart in the upper half so they keep crossing the whole screen.
+    if (streak.x - streak.length > game.width || streak.y > game.height + 20) Object.assign(streak, newStormStreak(false), storm.drift > .2 ? { y: Math.random() * game.height * .5 - 40 } : {});
   });
   if (!transition.swapped && transition.time >= SEASON_TRANSITION.duration * SEASON_TRANSITION.swapAt) {
     transition.swapped = true;
-    game.season = 'pyramids';
-    canvasWrap.classList.add('season-pyramids');
+    game.season = transition.to;
+    game.seasonIndex = transition.index;
+    setSeasonClass(game.season);
     const player = game.player;
     for (let index = 0; index < 36; index += 1) {
       const angle = Math.random() * Math.PI * 2, speed = 80 + Math.random() * 220;
-      game.particles.push({ x: player.x + player.width / 2, y: player.y + player.height / 2, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: .5 + Math.random() * .5, color: Math.random() < .5 ? '#ffd36b' : '#e7ba74', size: 2 + Math.random() * 3 });
+      game.particles.push({ x: player.x + player.width / 2, y: player.y + player.height / 2, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: .5 + Math.random() * .5, color: storm.burst[index % 2], size: 2 + Math.random() * 3 });
     }
-    playTone(660, .35);
+    playTone(storm.tone, .35);
   }
   if (transition.time >= SEASON_TRANSITION.duration) game.seasonTransition = null;
 }
 function drawSeasonTransition() {
   const transition = game.seasonTransition;
   if (!transition) return;
+  const theme = SEASON_THEMES[transition.to];
+  const { storm, titleColors } = theme;
   const progress = Math.min(1, transition.time / SEASON_TRANSITION.duration);
-  const storm = Math.sin(progress * Math.PI);
+  const strength = Math.sin(progress * Math.PI);
   context.save();
-  context.fillStyle = `rgba(214,164,98,${.5 * storm})`;
+  context.fillStyle = `rgba(${storm.tint},${.5 * strength})`;
   context.fillRect(0, 0, game.width, game.height);
   context.lineCap = 'round';
   transition.streaks.forEach(streak => {
-    context.globalAlpha = streak.alpha * storm;
-    context.strokeStyle = '#ffe2a8';
+    context.globalAlpha = streak.alpha * strength;
+    context.strokeStyle = storm.streak;
     context.lineWidth = streak.thickness;
     context.beginPath();
-    context.moveTo(streak.x - streak.length, streak.y - streak.length * .12);
+    context.moveTo(streak.x - streak.length, streak.y - streak.length * storm.drift);
     context.lineTo(streak.x, streak.y);
     context.stroke();
   });
   const flash = Math.max(0, 1 - Math.abs(progress - SEASON_TRANSITION.swapAt) / .07);
   context.globalAlpha = 1;
-  context.fillStyle = `rgba(255,240,200,${.85 * flash})`;
+  context.fillStyle = `rgba(${storm.flash},${.85 * flash})`;
   context.fillRect(0, 0, game.width, game.height);
   const titleIn = Math.min(1, Math.max(0, (progress - .2) / .15));
   const titleOut = Math.min(1, Math.max(0, (.97 - progress) / .15));
@@ -254,17 +282,21 @@ function drawSeasonTransition() {
     context.scale(scale, scale);
     context.textAlign = 'center';
     context.textBaseline = 'middle';
-    context.shadowColor = 'rgba(255,170,60,.9)';
+    context.shadowColor = titleColors.shadow;
     context.shadowBlur = 18;
-    context.fillStyle = '#5a2a0c';
+    context.fillStyle = titleColors.kicker;
     context.font = `700 ${Math.round(game.width * .03 + 6)}px Orbitron, sans-serif`;
-    context.fillText('S A I S O N   2', 0, -game.width * .1);
-    context.font = `${Math.round(game.width * .12)}px 'Sunlight Dreams', serif`;
+    context.fillText(`S A I S O N   ${String(transition.index + 1).split('').join(' ')}`, 0, -game.width * .1);
+    // Long titles shrink to fit the screen width.
+    let size = Math.round(game.width * .12);
+    context.font = `${size}px 'Sunlight Dreams', serif`;
+    const width = context.measureText(theme.title).width;
+    if (width > game.width * .88) { size = Math.floor(size * game.width * .88 / width); context.font = `${size}px 'Sunlight Dreams', serif`; }
     context.lineWidth = 6;
-    context.strokeStyle = '#7a3e12';
-    context.strokeText('Les Pyramides', 0, 0);
-    context.fillStyle = '#fff1c4';
-    context.fillText('Les Pyramides', 0, 0);
+    context.strokeStyle = titleColors.stroke;
+    context.strokeText(theme.title, 0, 0);
+    context.fillStyle = titleColors.fill;
+    context.fillText(theme.title, 0, 0);
   }
   context.restore();
 }
@@ -471,9 +503,10 @@ function resetGame() {
   game.toasts = [];
   game.runId = (game.runId || 0) + 1;
   loadRecordMarkers();
-  game.season = 'space';
+  game.season = seasonThemeAt(0);
+  game.seasonIndex = 0;
   game.seasonTransition = null;
-  canvasWrap.classList.remove('season-pyramids');
+  setSeasonClass(game.season);
   generatePlatforms();
   updateHud();
 }
@@ -715,9 +748,10 @@ function updateShooting(delta) {
 }
 function drawProjectile(projectile) {
   context.save();
-  context.shadowColor = isPyramidSeason() ? '#ffb347' : '#00ffff';
+  const [glow, fill] = currentTheme().projectile;
+  context.shadowColor = glow;
   context.shadowBlur = 12;
-  context.fillStyle = isPyramidSeason() ? '#ffe7a3' : '#b8ffff';
+  context.fillStyle = fill;
   context.beginPath();
   context.arc(projectile.x, projectile.y, SHOOT_CONFIG.radius, 0, Math.PI * 2);
   context.fill();
@@ -755,8 +789,8 @@ function handleMonsterCollisions(previousBottom) {
   }
 }
 function getMonsterSprite(type) {
-  const pyramid = isPyramidSeason() ? pyramidSprites.monsters[type] : null;
-  return isImageReady(pyramid) ? pyramid : monsterSprites[type];
+  const seasonal = currentSprites()?.monsters[type];
+  return isImageReady(seasonal) ? seasonal : monsterSprites[type];
 }
 function getMonsterAspect(type) {
   const sprite = getMonsterSprite(type);
@@ -832,12 +866,12 @@ function updateSwallowed(delta) {
   updateParticles(delta);
   if (player.swallowTime >= BLACK_HOLE_CONFIG.swallowDuration) endGame();
 }
-function paintBlackHole(ctx, x, y, radius, spin, pyramids) {
-  const [inner, outer] = pyramids ? ['#ffd36b', '#b8612a'] : ['#00ffff', '#ff00ff'];
+// colors: [inner swirl, outer swirl, halo], from the season theme.
+function paintBlackHole(ctx, x, y, radius, spin, [inner, outer, haloColor]) {
   ctx.save();
   ctx.translate(x, y);
   const halo = ctx.createRadialGradient(0, 0, radius * .5, 0, 0, radius * 2.2);
-  halo.addColorStop(0, pyramids ? 'rgba(90,40,10,.85)' : 'rgba(60,0,90,.85)');
+  halo.addColorStop(0, haloColor);
   halo.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = halo;
   ctx.beginPath(); ctx.arc(0, 0, radius * 2.2, 0, Math.PI * 2); ctx.fill();
@@ -861,10 +895,10 @@ function paintBlackHole(ctx, x, y, radius, spin, pyramids) {
   ctx.stroke();
   ctx.restore();
 }
-function drawBlackHoles() { game.hazards.forEach(hole => paintBlackHole(context, hole.x, hole.y, BLACK_HOLE_CONFIG.radius, hole.spin, isPyramidSeason())); }
+function drawBlackHoles() { game.hazards.forEach(hole => paintBlackHole(context, hole.x, hole.y, BLACK_HOLE_CONFIG.radius, hole.spin, currentTheme().blackHole)); }
 
-function paintShieldBubble(ctx, centerX, centerY, radius, pyramids, crest) {
-  const rim = pyramids ? '255,200,90' : '0,255,255';
+// rim: the season theme's 'r,g,b' shield colour.
+function paintShieldBubble(ctx, centerX, centerY, radius, rim, crest) {
   ctx.save();
   const fill = ctx.createRadialGradient(centerX - radius * .35, centerY - radius * .35, radius * .1, centerX, centerY, radius);
   fill.addColorStop(0, 'rgba(255,255,255,.5)'); fill.addColorStop(.55, `rgba(${rim},.1)`); fill.addColorStop(1, `rgba(${rim},.35)`);
@@ -887,8 +921,7 @@ function paintShieldBubble(ctx, centerX, centerY, radius, pyramids, crest) {
   ctx.restore();
 }
 // Two coils topped with soles; also drawn under the player's feet while spring jumps remain.
-function paintSprings(ctx, x, y, width, height, pyramids) {
-  const accent = pyramids ? '#ffb347' : '#ff4dff';
+function paintSprings(ctx, x, y, width, height, accent) {
   const soleHeight = height * .3;
   ctx.save();
   ctx.lineCap = 'round';
@@ -914,20 +947,21 @@ function drawWornShield() {
   if (!player.shield || player.dead) return;
   context.save();
   context.globalAlpha = .55 + Math.sin(performance.now() / 180) * .1;
-  paintShieldBubble(context, player.x + player.width / 2, player.y + player.height / 2, 30, isPyramidSeason(), false);
+  paintShieldBubble(context, player.x + player.width / 2, player.y + player.height / 2, 30, currentTheme().rim, false);
   context.restore();
 }
 function drawWornSprings() {
   const player = game.player;
   if (!player.springJumps || player.dead) return;
-  paintSprings(context, player.x + PLAYER_FEET.left - 2, player.y + player.height - 7, PLAYER_FEET.right - PLAYER_FEET.left + 4, 10, isPyramidSeason());
+  paintSprings(context, player.x + PLAYER_FEET.left - 2, player.y + player.height - 7, PLAYER_FEET.right - PLAYER_FEET.left + 4, 10, currentTheme().springs);
 }
 
 function getJetpackLook() {
-  const pyramid = isPyramidSeason() && isImageReady(pyramidSprites.jetpack);
-  const image = pyramid ? pyramidSprites.jetpack : jetpackSprite;
+  const seasonal = currentSprites()?.jetpack;
+  const useSeasonal = isImageReady(seasonal);
+  const image = useSeasonal ? seasonal : jetpackSprite;
   const height = isImageReady(image) ? JETPACK_CONFIG.width * image.naturalHeight / image.naturalWidth : JETPACK_CONFIG.height;
-  return { image, height, nozzles: pyramid ? PYRAMID_SEASON.jetpackNozzles : JETPACK_CONFIG.nozzles };
+  return { image, height, nozzles: useSeasonal ? currentTheme().jetpackNozzles : JETPACK_CONFIG.nozzles };
 }
 // World y (fixed as the camera scrolls) keeps each kind of bonus `minSpacing` apart even after one is used up.
 function maybeSpawnItem(platform) {
@@ -995,15 +1029,15 @@ function drawJetpackFlame(x, y, nozzles) {
 }
 function drawItems() {
   const look = getJetpackLook();
-  const pyramids = isPyramidSeason();
+  const theme = currentTheme();
   game.items.forEach(item => {
     const box = getItemBox(item);
     const bob = Math.sin(item.phase) * 1.5;
-    if (item.kind === 'shield') { paintShieldBubble(context, box.x + box.width / 2, box.y + box.height / 2 - 3 + bob, box.width / 2, pyramids, true); return; }
-    if (item.kind === 'springs') { paintSprings(context, box.x, box.y - 2 + bob, box.width, box.height, pyramids); return; }
+    if (item.kind === 'shield') { paintShieldBubble(context, box.x + box.width / 2, box.y + box.height / 2 - 3 + bob, box.width / 2, theme.rim, true); return; }
+    if (item.kind === 'springs') { paintSprings(context, box.x, box.y - 2 + bob, box.width, box.height, theme.springs); return; }
     if (!isImageReady(look.image)) return;
     context.save();
-    context.shadowColor = isPyramidSeason() ? '#ffd36b' : '#33ffff';
+    context.shadowColor = theme.itemGlow;
     context.shadowBlur = 10 + Math.sin(item.phase) * 4;
     context.drawImage(look.image, box.x, box.y + box.height - look.height - 2 + Math.sin(item.phase) * 1.5, box.width, look.height);
     context.restore();
@@ -1166,9 +1200,9 @@ shareButton.addEventListener('click', shareScore);
 // The side-panel guide shows the code-drawn bonuses and the black hole with the same art as in game.
 function paintGuideIcons() {
   const painters = {
-    shield: ctx => paintShieldBubble(ctx, 40, 26, 22, false, true),
-    springs: ctx => paintSprings(ctx, 20, 4, 40, 44, false),
-    blackHole: ctx => paintBlackHole(ctx, 40, 26, 11, .6, false)
+    shield: ctx => paintShieldBubble(ctx, 40, 26, 22, SEASON_THEMES.space.rim, true),
+    springs: ctx => paintSprings(ctx, 20, 4, 40, 44, SEASON_THEMES.space.springs),
+    blackHole: ctx => paintBlackHole(ctx, 40, 26, 11, .6, SEASON_THEMES.space.blackHole)
   };
   document.querySelectorAll('[data-guide-icon]').forEach(image => {
     const iconCanvas = document.createElement('canvas');
@@ -1290,17 +1324,19 @@ function drawMuzzleFlash() {
   context.fill();
   context.restore();
 }
-// 0 = space, 1 = pyramids; eases across the first part of the season transition.
-function getPyramidBlend() {
-  const transition = game.seasonTransition;
-  if (!transition) return isPyramidSeason() ? 1 : 0;
-  const progress = Math.min(1, transition.time / (SEASON_TRANSITION.duration * .6));
-  return progress * progress * (3 - 2 * progress);
+function drawThemeBackground(theme) {
+  if (theme === 'pyramids') drawPyramidBackground();
+  else if (theme === 'ice') drawIceBackground();
+  else drawSpaceBackground();
 }
+// The outgoing season's scene cross-fades into the next one over the first part of the transition.
 function drawBackground() {
-  const blend = getPyramidBlend();
-  if (blend < 1) drawSpaceBackground();
-  if (blend > 0) { context.save(); context.globalAlpha = blend; drawPyramidBackground(); context.restore(); }
+  const transition = game.seasonTransition;
+  if (!transition) { drawThemeBackground(game.season); return; }
+  const progress = Math.min(1, transition.time / (SEASON_TRANSITION.duration * .6));
+  const blend = progress * progress * (3 - 2 * progress);
+  if (blend < 1) drawThemeBackground(transition.from);
+  if (blend > 0) { context.save(); context.globalAlpha = blend; drawThemeBackground(transition.to); context.restore(); }
 }
 // The desert scene is static, so it is painted once per canvas size and reused.
 let pyramidBackdrop = null;
@@ -1352,23 +1388,132 @@ function drawPyramidBackground() {
   // drifting sand motes scroll with the climb like the stars do in space
   game.stars.forEach(star => { const y = (star.y + game.cameraY * .08) % game.height; context.fillStyle = star.size > 1 ? 'rgba(255,230,170,.8)' : 'rgba(255,248,225,.55)'; context.fillRect(star.x, y, star.size + .5, star.size + .5); });
 }
+// The ice cave, after zinzinereglaciaire.jpeg: a dark cave mouth between frosted walls, icicles overhead and a snowy
+// floor with old bones. Static like the desert, so it is painted once per canvas size (with a fixed seed so it never shifts).
+let iceBackdrop = null;
+function getIceBackdrop() {
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  if (iceBackdrop && iceBackdrop.logicalWidth === game.width && iceBackdrop.logicalHeight === game.height) return iceBackdrop;
+  const backdrop = document.createElement('canvas');
+  backdrop.width = Math.ceil(game.width * ratio); backdrop.height = Math.ceil(game.height * ratio);
+  backdrop.logicalWidth = game.width; backdrop.logicalHeight = game.height;
+  const draw = backdrop.getContext('2d'); draw.scale(ratio, ratio);
+  const w = game.width, h = game.height;
+  let seed = 7;
+  const random = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const base = draw.createLinearGradient(0, 0, 0, h);
+  base.addColorStop(0, '#0c2c4f'); base.addColorStop(.55, '#123f68'); base.addColorStop(1, '#2d6f9c');
+  draw.fillStyle = base; draw.fillRect(0, 0, w, h);
+  const depth = draw.createRadialGradient(w * .5, h * .42, 0, w * .5, h * .42, w * .65);
+  depth.addColorStop(0, 'rgba(3,14,34,.9)'); depth.addColorStop(.55, 'rgba(6,26,56,.55)'); depth.addColorStop(1, 'rgba(6,26,56,0)');
+  draw.fillStyle = depth; draw.fillRect(0, 0, w, h);
+  // frosted walls, one per side, with a jagged inner edge and pale veins
+  [-1, 1].forEach(side => {
+    const at = x => side < 0 ? x : w - x;
+    const phase = side < 0 ? 0 : 2.3;
+    const edge = y => w * (.12 + .06 * Math.sin(y / h * 7 + phase) + .025 * Math.sin(y / h * 23 + phase * 2));
+    draw.beginPath(); draw.moveTo(at(0), 0);
+    for (let y = 0; y <= h; y += h / 40) draw.lineTo(at(edge(y)), y);
+    draw.lineTo(at(0), h); draw.closePath();
+    const wall = draw.createLinearGradient(at(0), 0, at(w * .22), 0);
+    wall.addColorStop(0, '#a8dcf2'); wall.addColorStop(.55, '#5a9fcb'); wall.addColorStop(1, '#2d6a96');
+    draw.fillStyle = wall; draw.fill();
+    draw.strokeStyle = 'rgba(225,247,255,.55)'; draw.lineWidth = 1.5; draw.stroke();
+    draw.strokeStyle = 'rgba(235,250,255,.3)'; draw.lineWidth = 1;
+    for (let vein = 0; vein < 10; vein += 1) {
+      let x = w * (.01 + random() * .1), y = random() * h;
+      draw.beginPath(); draw.moveTo(at(x), y);
+      for (let step = 0; step < 6; step += 1) { x = Math.max(2, x + (random() - .5) * 12); y += 10 + random() * 16; draw.lineTo(at(x), y); }
+      draw.stroke();
+    }
+    // air bubbles trapped in the ice
+    for (let bubble = 0; bubble < 5; bubble += 1) {
+      const y = h * (.15 + random() * .65), x = at(Math.max(10, edge(y) * (.3 + random() * .5))), r = 4 + random() * 9;
+      draw.strokeStyle = 'rgba(230,248,255,.55)'; draw.lineWidth = 1.2;
+      draw.beginPath(); draw.arc(x, y, r, 0, Math.PI * 2); draw.stroke();
+      draw.fillStyle = 'rgba(255,255,255,.6)'; draw.beginPath(); draw.arc(x - r * .35, y - r * .35, r * .22, 0, Math.PI * 2); draw.fill();
+    }
+  });
+  // icicles hanging from the cave roof, longer towards the walls
+  draw.fillStyle = 'rgba(200,236,252,.9)'; draw.fillRect(0, 0, w, h * .015);
+  for (let x = -4; x < w; x += 8 + random() * 13) {
+    const nearWall = 1 - Math.min(x, w - x) / (w / 2);
+    const length = h * (.025 + random() * .07) * (1 + 1.6 * nearWall);
+    const width = 5 + random() * 9;
+    const icicle = draw.createLinearGradient(0, 0, 0, length);
+    icicle.addColorStop(0, 'rgba(235,250,255,.95)'); icicle.addColorStop(1, 'rgba(120,190,230,.15)');
+    draw.fillStyle = icicle;
+    draw.beginPath(); draw.moveTo(x, 0); draw.lineTo(x + width, 0); draw.lineTo(x + width / 2 + (random() - .5) * 3, length); draw.closePath(); draw.fill();
+  }
+  // snowy floor with drifts
+  const floorTop = h * .91;
+  const snow = draw.createLinearGradient(0, floorTop - h * .02, 0, h);
+  snow.addColorStop(0, '#e4f5fc'); snow.addColorStop(1, '#9fcde6');
+  draw.fillStyle = snow; draw.beginPath(); draw.moveTo(0, h);
+  for (let x = 0; x <= w; x += 8) draw.lineTo(x, floorTop + Math.sin(x / w * Math.PI * 3 + .8) * h * .012 + Math.sin(x / w * Math.PI * 9) * h * .004);
+  draw.lineTo(w, h); draw.closePath(); draw.fill();
+  // old ribs and a femur in the snow, bottom right
+  draw.strokeStyle = 'rgba(214,196,168,.85)'; draw.lineCap = 'round'; draw.lineWidth = Math.max(2, w * .012);
+  for (let rib = 0; rib < 4; rib += 1) {
+    const x = w * (.68 + rib * .055), y = floorTop + h * .01;
+    draw.beginPath(); draw.moveTo(x, y); draw.quadraticCurveTo(x + w * .035, y - h * .05, x + w * .06, y - h * .012); draw.stroke();
+  }
+  draw.lineWidth = Math.max(3, w * .016);
+  draw.beginPath(); draw.moveTo(w * .7, h * .965); draw.lineTo(w * .88, h * .945); draw.stroke();
+  // frosted fern sprigs, bottom left
+  draw.strokeStyle = 'rgba(225,245,255,.7)'; draw.lineWidth = 1;
+  [[.06, .97, -1.2], [.13, .98, -1.45], [.2, .975, -1.75]].forEach(([cx, cy, angle]) => {
+    const x0 = w * cx, y0 = h * cy, length = h * .07;
+    const x1 = x0 + Math.cos(angle) * length, y1 = y0 + Math.sin(angle) * length;
+    draw.beginPath(); draw.moveTo(x0, y0); draw.lineTo(x1, y1); draw.stroke();
+    for (let leaf = 1; leaf < 8; leaf += 1) {
+      const t = leaf / 8, lx = x0 + (x1 - x0) * t, ly = y0 + (y1 - y0) * t, size = length * .22 * (1 - t * .6);
+      [-1, 1].forEach(dir => { draw.beginPath(); draw.moveTo(lx, ly); draw.lineTo(lx + Math.cos(angle + dir * .9) * size, ly + Math.sin(angle + dir * .9) * size); draw.stroke(); });
+    }
+  });
+  // sparkles on the ice
+  draw.fillStyle = 'rgba(255,255,255,.85)';
+  for (let sparkle = 0; sparkle < 14; sparkle += 1) {
+    const side = random() < .5, x = side ? w * random() * .15 : w * (1 - random() * .15), y = h * random() * .85, size = 2 + random() * 4;
+    draw.beginPath(); draw.moveTo(x, y - size); draw.lineTo(x + size * .25, y); draw.lineTo(x, y + size); draw.lineTo(x - size * .25, y); draw.closePath(); draw.fill();
+    draw.beginPath(); draw.moveTo(x - size, y); draw.lineTo(x, y + size * .25); draw.lineTo(x + size, y); draw.lineTo(x, y - size * .25); draw.closePath(); draw.fill();
+  }
+  iceBackdrop = backdrop;
+  return backdrop;
+}
+function drawIceBackground() {
+  context.drawImage(getIceBackdrop(), 0, 0, game.width, game.height);
+  // snowflakes drift down and sway, and scroll with the climb like the stars do in space
+  const time = performance.now() / 1000;
+  const baseAlpha = context.globalAlpha;
+  context.fillStyle = '#ffffff';
+  game.stars.forEach((star, index) => {
+    const y = (star.y + game.cameraY * .08 + time * (16 + (index % 5) * 7)) % game.height;
+    const x = star.x + Math.sin(time * .8 + index) * 6;
+    context.globalAlpha = baseAlpha * (.35 + star.alpha * .6);
+    context.beginPath(); context.arc(x, y, star.size * .9 + .5, 0, Math.PI * 2); context.fill();
+  });
+  context.globalAlpha = baseAlpha;
+}
 function drawSpaceBackground() {
   const gradient = context.createLinearGradient(0, 0, 0, game.height); gradient.addColorStop(0, '#0b0636'); gradient.addColorStop(1, '#00001a'); context.fillStyle = gradient; context.fillRect(0, 0, game.width, game.height);
   const nebulas = [[.85, .22, 'rgba(140,255,58,.13)', 'rgba(0,0,255,.1)'], [.1, .85, 'rgba(255,0,255,.2)', 'rgba(255,140,0,.08)']];
   nebulas.forEach(([x, y, inner, outer]) => { const glow = context.createRadialGradient(game.width * x, game.height * y, 0, game.width * x, game.height * y, game.width * .75); glow.addColorStop(0, inner); glow.addColorStop(.5, outer); glow.addColorStop(1, 'rgba(0,0,26,0)'); context.fillStyle = glow; context.fillRect(0, 0, game.width, game.height); });
-  game.stars.forEach(star => { const y = (star.y + game.cameraY * .08) % game.height; context.globalAlpha = star.alpha; context.fillStyle = star.size > 1 ? '#00ffff' : '#ffffff'; context.fillRect(star.x, y, star.size, star.size); }); context.globalAlpha = 1;
+  const baseAlpha = context.globalAlpha;
+  game.stars.forEach(star => { const y = (star.y + game.cameraY * .08) % game.height; context.globalAlpha = baseAlpha * star.alpha; context.fillStyle = star.size > 1 ? '#00ffff' : '#ffffff'; context.fillRect(star.x, y, star.size, star.size); }); context.globalAlpha = baseAlpha;
 }
 function drawPlatform(platform) {
   const { x, y, width } = platform;
-  const pyramidSprite = isPyramidSeason() ? pyramidSprites.platforms[platform.type === 'base' ? PLATFORM_TYPES.NORMAL : platform.type] : null;
-  if (isImageReady(pyramidSprite)) {
+  const theme = currentTheme();
+  const seasonalSprite = currentSprites()?.platforms[platform.type === 'base' ? PLATFORM_TYPES.NORMAL : platform.type];
+  if (isImageReady(seasonalSprite)) {
     context.save();
     context.globalAlpha = platform.active ? (platform.breakTimer > 0 ? .45 + Math.abs(Math.sin(platform.breakTimer * 22)) * .55 : 1) : .35;
-    // sand-coloured art needs a soft dark halo to stand out against the dunes
-    context.shadowColor = 'rgba(70,30,10,.55)';
+    // seasonal art needs a soft dark halo to stand out against its brighter scenery
+    context.shadowColor = theme.platformShadow;
     context.shadowBlur = 6;
     context.shadowOffsetY = 2;
-    context.drawImage(pyramidSprite, x, y - 2, width, width * pyramidSprite.naturalHeight / pyramidSprite.naturalWidth * PYRAMID_SEASON.platformSquash);
+    context.drawImage(seasonalSprite, x, y - 2, width, width * seasonalSprite.naturalHeight / seasonalSprite.naturalWidth * theme.platformSquash);
     context.restore();
     return;
   }
@@ -1429,7 +1574,7 @@ function drawPlatform(platform) {
   }
   context.restore();
 }
-function drawPlayer() { const player = game.player; const squash = player.squashTimer > 0 ? player.squashTimer / .16 : 0; const scaleX = 1 + squash * .13; const scaleY = 1 - squash * .2; context.save(); context.translate(player.x + player.width / 2, player.y + player.height); context.rotate(player.rotation); const shrink = player.swallowed ? Math.max(0, 1 - player.swallowTime / BLACK_HOLE_CONFIG.swallowDuration) : 1; context.scale(scaleX * shrink, scaleY * shrink); context.fillStyle = 'rgba(0,0,0,.3)'; context.beginPath(); context.ellipse(0, 0, 13, 2.5, 0, 0, Math.PI * 2); context.fill(); const pyramidPlayer = isPyramidSeason() && isImageReady(pyramidSprites.player) ? pyramidSprites.player : null; if (pyramidPlayer) { const height = PYRAMID_SEASON.player.height; const width = height * pyramidPlayer.naturalWidth / pyramidPlayer.naturalHeight; context.drawImage(pyramidPlayer, -width / 2, -height + 1, width, height); } else if (playerSprite) { context.drawImage(playerSprite, -16, -PLAYER_SPRITE_FEET, 32, 36); } else { context.translate(0, -player.height / 2); context.fillStyle = '#d8f546'; context.beginPath(); context.ellipse(0, -2, 16, 18, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#10141d'; context.beginPath(); context.ellipse(0, 1, 13, 10, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#f1eee5'; context.beginPath(); context.arc(-5, -1, 2.5, 0, Math.PI * 2); context.arc(5, -1, 2.5, 0, Math.PI * 2); context.fill(); } context.restore(); }
+function drawPlayer() { const player = game.player; const squash = player.squashTimer > 0 ? player.squashTimer / .16 : 0; const scaleX = 1 + squash * .13; const scaleY = 1 - squash * .2; context.save(); context.translate(player.x + player.width / 2, player.y + player.height); context.rotate(player.rotation); const shrink = player.swallowed ? Math.max(0, 1 - player.swallowTime / BLACK_HOLE_CONFIG.swallowDuration) : 1; context.scale(scaleX * shrink, scaleY * shrink); context.fillStyle = 'rgba(0,0,0,.3)'; context.beginPath(); context.ellipse(0, 0, 13, 2.5, 0, 0, Math.PI * 2); context.fill(); const seasonalPlayer = currentSprites()?.player; if (isImageReady(seasonalPlayer)) { const height = currentTheme().playerHeight; const width = height * seasonalPlayer.naturalWidth / seasonalPlayer.naturalHeight; context.drawImage(seasonalPlayer, -width / 2, -height + 1, width, height); } else if (playerSprite) { context.drawImage(playerSprite, -16, -PLAYER_SPRITE_FEET, 32, 36); } else { context.translate(0, -player.height / 2); context.fillStyle = '#d8f546'; context.beginPath(); context.ellipse(0, -2, 16, 18, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#10141d'; context.beginPath(); context.ellipse(0, 1, 13, 10, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#f1eee5'; context.beginPath(); context.arc(-5, -1, 2.5, 0, Math.PI * 2); context.arc(5, -1, 2.5, 0, Math.PI * 2); context.fill(); } context.restore(); }
 function drawParticle(particle) { context.globalAlpha = Math.max(0, particle.life * 2); context.fillStyle = particle.color; context.fillRect(particle.x, particle.y, particle.size, particle.size); context.globalAlpha = 1; }
 
 function playTone(frequency, duration) { if (!game.audio) game.audio = new (window.AudioContext || window.webkitAudioContext)(); const oscillator = game.audio.createOscillator(); const gain = game.audio.createGain(); oscillator.frequency.value = frequency; oscillator.type = 'square'; gain.gain.setValueAtTime(.025, game.audio.currentTime); gain.gain.exponentialRampToValueAtTime(.001, game.audio.currentTime + duration); oscillator.connect(gain); gain.connect(game.audio.destination); oscillator.start(); oscillator.stop(game.audio.currentTime + duration); }
