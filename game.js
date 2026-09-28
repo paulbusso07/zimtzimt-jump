@@ -140,15 +140,13 @@ const MONSTER_CONFIG = {
   jumper: { width: 40, aspect: .99, hitbox: { x: .14, top: .14, bottom: .1 }, hopDelay: [1, 2.2], hopDuration: .7, hopHeight: 64, reach: 170, maxRise: 110 },
   flying: { width: 42, aspect: 1.42, hitbox: { x: .12, top: .06, bottom: .38 }, speed: [55, 95], bob: 6, turnDelay: [1.5, 4] },
   jumperTargets: ['normal', 'moving', 'movingVertical', 'small'],
-  stompVelocity: -700,
-  stompScore: 100
+  stompVelocity: -700
 };
 // Jetpack power-up: sits on a main-path platform; touching it flies the player up at `speed` for `duration` s.
 const JETPACK_CONFIG = { startAltitude: 100, minSpacing: 2400, chance: .03, duration: 2.4, speed: 1150, ramp: 6, width: 28, height: 21, nozzles: [.17, .78] };
 // Cut out of jetpack.png (flames removed: they're animated in code under the nozzles at `nozzles` × width).
 const jetpackSprite = new Image();
 jetpackSprite.src = 'sprites/jetpack.png';
-function isJetpackSpriteReady() { return jetpackSprite.complete && jetpackSprite.naturalWidth > 0; }
 // While a fully visible monster (at least `visibleMargin` px below the top edge) is above the player and less
 // than `triggerRange` px higher, the player fires straight up every `cooldown` seconds; the balls don't aim,
 // so the player has to line up under the monster.
@@ -159,6 +157,102 @@ Object.values(MONSTER_TYPES).forEach(type => {
   image.onload = () => { monsterSprites[type] = image; };
   image.src = `sprites/monster-${type}.png`;
 });
+// Seasons only change the look: past `altitude` metres the pyramid art (sprites/pyramids/) replaces the space art.
+const PYRAMID_SEASON = {
+  altitude: 3000,
+  // Pyramid platform art is taller than the space set; its height is squashed by this factor.
+  platformSquash: .6,
+  player: { height: 44 },
+  jetpackNozzles: [.2, .8]
+};
+const SEASON_TRANSITION = { duration: 3.2, swapAt: .45, streaks: 110 };
+function loadImage(src) { const image = new Image(); image.src = src; return image; }
+function isImageReady(image) { return Boolean(image && image.complete && image.naturalWidth > 0); }
+const pyramidSprites = {
+  platforms: Object.fromEntries(['normal', 'moving', 'movingVertical', 'breakable', 'disappearing', 'small', 'bouncy', 'trampoline'].map(type => [type, loadImage(`sprites/pyramids/${type}.png`)])),
+  monsters: Object.fromEntries(Object.values(MONSTER_TYPES).map(type => [type, loadImage(`sprites/pyramids/monster-${type}.png`)])),
+  player: loadImage('sprites/pyramids/player.png'),
+  jetpack: loadImage('sprites/pyramids/jetpack.png')
+};
+function isPyramidSeason() { return game.season === 'pyramids'; }
+function newSandStreak(anywhere) {
+  return { x: anywhere ? Math.random() * game.width : -Math.random() * 160, y: Math.random() * game.height, length: 30 + Math.random() * 110, speed: 520 + Math.random() * 760, thickness: 1 + Math.random() * 2.5, alpha: .25 + Math.random() * .55 };
+}
+function startSeasonTransition() {
+  game.seasonTransition = { time: 0, swapped: false, streaks: Array.from({ length: SEASON_TRANSITION.streaks }, () => newSandStreak(true)) };
+  playTone(392, .3);
+}
+// A sandstorm sweeps the screen; the art swaps at its peak (`swapAt`), hidden behind a golden flash.
+function updateSeason(delta) {
+  if (!game.seasonTransition && !isPyramidSeason() && game.altitude >= PYRAMID_SEASON.altitude) startSeasonTransition();
+  const transition = game.seasonTransition;
+  if (!transition) return;
+  transition.time += delta;
+  transition.streaks.forEach(streak => {
+    streak.x += streak.speed * delta;
+    streak.y += streak.speed * .12 * delta;
+    if (streak.x - streak.length > game.width || streak.y > game.height + 20) Object.assign(streak, newSandStreak(false));
+  });
+  if (!transition.swapped && transition.time >= SEASON_TRANSITION.duration * SEASON_TRANSITION.swapAt) {
+    transition.swapped = true;
+    game.season = 'pyramids';
+    canvasWrap.classList.add('season-pyramids');
+    const player = game.player;
+    for (let index = 0; index < 36; index += 1) {
+      const angle = Math.random() * Math.PI * 2, speed = 80 + Math.random() * 220;
+      game.particles.push({ x: player.x + player.width / 2, y: player.y + player.height / 2, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: .5 + Math.random() * .5, color: Math.random() < .5 ? '#ffd36b' : '#e7ba74', size: 2 + Math.random() * 3 });
+    }
+    playTone(660, .35);
+  }
+  if (transition.time >= SEASON_TRANSITION.duration) game.seasonTransition = null;
+}
+function drawSeasonTransition() {
+  const transition = game.seasonTransition;
+  if (!transition) return;
+  const progress = Math.min(1, transition.time / SEASON_TRANSITION.duration);
+  const storm = Math.sin(progress * Math.PI);
+  context.save();
+  context.fillStyle = `rgba(214,164,98,${.5 * storm})`;
+  context.fillRect(0, 0, game.width, game.height);
+  context.lineCap = 'round';
+  transition.streaks.forEach(streak => {
+    context.globalAlpha = streak.alpha * storm;
+    context.strokeStyle = '#ffe2a8';
+    context.lineWidth = streak.thickness;
+    context.beginPath();
+    context.moveTo(streak.x - streak.length, streak.y - streak.length * .12);
+    context.lineTo(streak.x, streak.y);
+    context.stroke();
+  });
+  const flash = Math.max(0, 1 - Math.abs(progress - SEASON_TRANSITION.swapAt) / .07);
+  context.globalAlpha = 1;
+  context.fillStyle = `rgba(255,240,200,${.85 * flash})`;
+  context.fillRect(0, 0, game.width, game.height);
+  const titleIn = Math.min(1, Math.max(0, (progress - .2) / .15));
+  const titleOut = Math.min(1, Math.max(0, (.97 - progress) / .15));
+  const titleAlpha = Math.min(titleIn, titleOut);
+  if (titleAlpha > 0) {
+    const centerX = game.width / 2, centerY = game.height * .42;
+    const scale = .85 + .15 * (1 - Math.pow(1 - titleIn, 3));
+    context.globalAlpha = titleAlpha;
+    context.translate(centerX, centerY);
+    context.scale(scale, scale);
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.shadowColor = 'rgba(255,170,60,.9)';
+    context.shadowBlur = 18;
+    context.fillStyle = '#5a2a0c';
+    context.font = `700 ${Math.round(game.width * .03 + 6)}px Orbitron, sans-serif`;
+    context.fillText('S A I S O N   2', 0, -game.width * .1);
+    context.font = `${Math.round(game.width * .12)}px 'Sunlight Dreams', serif`;
+    context.lineWidth = 6;
+    context.strokeStyle = '#7a3e12';
+    context.strokeText('Les Pyramides', 0, 0);
+    context.fillStyle = '#fff1c4';
+    context.fillText('Les Pyramides', 0, 0);
+  }
+  context.restore();
+}
 const game = { running: false, paused: false, lastTime: 0, score: 0, altitude: 0, cameraY: 0, platforms: [], particles: [], stars: [], player: null, width: 0, height: 0, audio: null };
 const bestScoreKey = 'zimtzimt-jump-best';
 const bestScoreEl = document.getElementById('bestScore');
@@ -333,9 +427,13 @@ function resetGame() {
   game.monsters = [];
   game.projectiles = [];
   game.shootCooldown = 0;
+  game.firing = false;
   game.items = [];
   game.droppedJetpacks = [];
   game.lastJetpackWorldY = Infinity;
+  game.season = 'space';
+  game.seasonTransition = null;
+  canvasWrap.classList.remove('season-pyramids');
   generatePlatforms();
   updateHud();
 }
@@ -448,7 +546,7 @@ function maybeSpawnMonster(y) {
   if (Math.random() >= min + (max - min) * getDifficulty()) return;
   const type = chooseMonsterType();
   const config = MONSTER_CONFIG[type];
-  const monster = { type, width: config.width, height: config.width * config.aspect, x: 0, y: 0, alive: true, platform: null, hop: null, hopTimer: randomBetween(MONSTER_CONFIG.jumper.hopDelay), velocityX: 0, baseY: 0, phase: Math.random() * 6.28, turnTimer: 0, rotation: 0, velocityY: 0 };
+  const monster = { type, width: config.width, height: config.width * getMonsterAspect(type), x: 0, y: 0, alive: true, platform: null, hop: null, hopTimer: randomBetween(MONSTER_CONFIG.jumper.hopDelay), velocityX: 0, baseY: 0, phase: Math.random() * 6.28, turnTimer: 0, rotation: 0, velocityY: 0 };
   if (type === MONSTER_TYPES.FLYING) {
     monster.baseY = y - 40;
     monster.x = 18 + Math.random() * (game.width - monster.width - 36);
@@ -525,25 +623,32 @@ function killMonster(monster) {
   const box = getMonsterHitbox(monster);
   monster.alive = false;
   monster.velocityY = -120;
-  game.score += MONSTER_CONFIG.stompScore;
   burst(box.left + (box.right - box.left) / 2, box.top, 'monster');
   playTone(640, .1);
 }
 function monsterCenter(monster) { return { x: monster.x + monster.width / 2, y: monster.y + monster.height / 2 }; }
 function updateShooting(delta) {
   const player = game.player;
-  game.shootCooldown = Math.max(0, game.shootCooldown - delta);
   player.shootTimer = Math.max(0, (player.shootTimer || 0) - delta);
-  if (!player.dead && game.shootCooldown === 0) {
-    const origin = { x: player.x + player.width / 2, y: player.y + 10 };
-    const monsterNearby = game.monsters.some(monster => {
-      if (!monster.alive || monster.y < SHOOT_CONFIG.visibleMargin) return false;
-      const height = origin.y - monsterCenter(monster).y;
-      return height > 0 && height < SHOOT_CONFIG.triggerRange;
-    });
-    if (monsterNearby) {
+  const origin = { x: player.x + player.width / 2, y: player.y + 10 };
+  // Start when a visible monster comes within range; keep going while one stays on screen above the feet,
+  // so the player's own bouncing doesn't chop the rhythm.
+  const startsFiring = game.monsters.some(monster => {
+    if (!monster.alive || monster.y < SHOOT_CONFIG.visibleMargin) return false;
+    const height = origin.y - monsterCenter(monster).y;
+    return height > 0 && height < SHOOT_CONFIG.triggerRange;
+  });
+  const keepsFiring = game.firing && game.monsters.some(monster => monster.alive && monster.y + monster.height > 0 && monsterCenter(monster).y < player.y + player.height);
+  const wasFiring = game.firing;
+  game.firing = !player.dead && (startsFiring || keepsFiring);
+  if (!game.firing) game.shootCooldown = 0;
+  else {
+    if (!wasFiring) game.shootCooldown = 0;
+    game.shootCooldown -= delta;
+    // Fixed cadence: carry the leftover time over so frame jitter doesn't drift the rhythm.
+    while (game.shootCooldown <= 0) {
       game.projectiles.push({ x: origin.x, y: origin.y, velocityX: 0, velocityY: -SHOOT_CONFIG.speed, life: SHOOT_CONFIG.life });
-      game.shootCooldown = SHOOT_CONFIG.cooldown;
+      game.shootCooldown += SHOOT_CONFIG.cooldown;
       player.shootTimer = .12;
       playTone(880, .04);
     }
@@ -563,9 +668,9 @@ function updateShooting(delta) {
 }
 function drawProjectile(projectile) {
   context.save();
-  context.shadowColor = '#00ffff';
+  context.shadowColor = isPyramidSeason() ? '#ffb347' : '#00ffff';
   context.shadowBlur = 12;
-  context.fillStyle = '#b8ffff';
+  context.fillStyle = isPyramidSeason() ? '#ffe7a3' : '#b8ffff';
   context.beginPath();
   context.arc(projectile.x, projectile.y, SHOOT_CONFIG.radius, 0, Math.PI * 2);
   context.fill();
@@ -595,18 +700,37 @@ function handleMonsterCollisions(previousBottom) {
     return;
   }
 }
+function getMonsterSprite(type) {
+  const pyramid = isPyramidSeason() ? pyramidSprites.monsters[type] : null;
+  return isImageReady(pyramid) ? pyramid : monsterSprites[type];
+}
+function getMonsterAspect(type) {
+  const sprite = getMonsterSprite(type);
+  return isImageReady(sprite) ? sprite.naturalHeight / sprite.naturalWidth : MONSTER_CONFIG[type].aspect;
+}
 function drawMonster(monster) {
-  const sprite = monsterSprites[monster.type];
+  const sprite = getMonsterSprite(monster.type);
   context.save();
   context.translate(monster.x + monster.width / 2, monster.y + monster.height / 2);
   if (!monster.alive) { context.rotate(monster.rotation); context.globalAlpha = .8; }
   if (monster.type === MONSTER_TYPES.FLYING && monster.velocityX < 0) context.scale(-1, 1);
   if (monster.hop) { const stretch = 1 + Math.sin(monster.hop.t * Math.PI) * .08; context.scale(1 / stretch, stretch); }
-  if (sprite) context.drawImage(sprite, -monster.width / 2, -monster.height / 2, monster.width, monster.height);
+  if (isImageReady(sprite)) {
+    // fit inside the hitbox box without stretching, standing on its bottom edge
+    const fit = Math.min(monster.width / sprite.naturalWidth, monster.height / sprite.naturalHeight);
+    const width = sprite.naturalWidth * fit, height = sprite.naturalHeight * fit;
+    context.drawImage(sprite, -width / 2, monster.height / 2 - height, width, height);
+  }
   else { context.fillStyle = '#ff00ff'; context.beginPath(); context.arc(0, 0, monster.width / 2, 0, Math.PI * 2); context.fill(); }
   context.restore();
 }
 
+function getJetpackLook() {
+  const pyramid = isPyramidSeason() && isImageReady(pyramidSprites.jetpack);
+  const image = pyramid ? pyramidSprites.jetpack : jetpackSprite;
+  const height = isImageReady(image) ? JETPACK_CONFIG.width * image.naturalHeight / image.naturalWidth : JETPACK_CONFIG.height;
+  return { image, height, nozzles: pyramid ? PYRAMID_SEASON.jetpackNozzles : JETPACK_CONFIG.nozzles };
+}
 // World y (fixed as the camera scrolls) keeps jetpacks `minSpacing` apart even after one is used up.
 function maybeSpawnJetpack(platform) {
   if (game.altitude < JETPACK_CONFIG.startAltitude || platform.type !== PLATFORM_TYPES.NORMAL) return;
@@ -643,17 +767,17 @@ function applyJetpackThrust(delta) {
   if (!player.jetpackTime) return false;
   player.jetpackTime = Math.max(0, player.jetpackTime - delta);
   player.velocityY += (-JETPACK_CONFIG.speed - player.velocityY) * Math.min(1, delta * JETPACK_CONFIG.ramp);
-  for (let index = 0; index < 2; index += 1) game.particles.push({ x: player.x - 10 + JETPACK_CONFIG.nozzles[Math.random() < .5 ? 0 : 1] * JETPACK_CONFIG.width + (Math.random() - .5) * 4, y: player.y + player.height - 4, vx: (Math.random() - .5) * 60, vy: 180 + Math.random() * 120, life: .25 + Math.random() * .2, color: Math.random() < .5 ? '#ffb347' : '#ff4dff', size: 2 + Math.random() * 3 });
+  for (let index = 0; index < 2; index += 1) game.particles.push({ x: player.x - 10 + getJetpackLook().nozzles[Math.random() < .5 ? 0 : 1] * JETPACK_CONFIG.width + (Math.random() - .5) * 4, y: player.y + player.height - 4, vx: (Math.random() - .5) * 60, vy: 180 + Math.random() * 120, life: .25 + Math.random() * .2, color: Math.random() < .5 ? '#ffb347' : '#ff4dff', size: 2 + Math.random() * 3 });
   if (!player.jetpackTime) player.boosted = true;
   if (!player.jetpackTime) game.droppedJetpacks.push({ x: player.x - 10, y: player.y + 12, velocityX: -60 + Math.random() * 120, velocityY: -80, rotation: 0 });
   return true;
 }
-function drawJetpackFlame(x, y) {
+function drawJetpackFlame(x, y, nozzles) {
   const length = 10 + Math.random() * 8;
   context.save();
   context.shadowColor = '#ff4dff';
   context.shadowBlur = 12;
-  JETPACK_CONFIG.nozzles.map(ratio => x + ratio * JETPACK_CONFIG.width).forEach(nozzle => {
+  nozzles.map(ratio => x + ratio * JETPACK_CONFIG.width).forEach(nozzle => {
     const flame = context.createLinearGradient(0, y, 0, y + length);
     flame.addColorStop(0, '#ffffff'); flame.addColorStop(.35, '#ffb347'); flame.addColorStop(1, 'rgba(255,77,255,0)');
     context.fillStyle = flame;
@@ -662,13 +786,14 @@ function drawJetpackFlame(x, y) {
   context.restore();
 }
 function drawItems() {
-  if (!isJetpackSpriteReady()) return;
+  const look = getJetpackLook();
+  if (!isImageReady(look.image)) return;
   game.items.forEach(item => {
     const box = getItemBox(item);
     context.save();
-    context.shadowColor = '#33ffff';
+    context.shadowColor = isPyramidSeason() ? '#ffd36b' : '#33ffff';
     context.shadowBlur = 10 + Math.sin(item.phase) * 4;
-    context.drawImage(jetpackSprite, box.x, box.y - 2 + Math.sin(item.phase) * 1.5, box.width, box.height);
+    context.drawImage(look.image, box.x, box.y + box.height - look.height - 2 + Math.sin(item.phase) * 1.5, box.width, look.height);
     context.restore();
   });
   game.droppedJetpacks.forEach(jetpack => {
@@ -676,7 +801,7 @@ function drawItems() {
     context.translate(jetpack.x + JETPACK_CONFIG.width / 2, jetpack.y + JETPACK_CONFIG.height / 2);
     context.rotate(jetpack.rotation);
     context.globalAlpha = .8;
-    context.drawImage(jetpackSprite, -JETPACK_CONFIG.width / 2, -JETPACK_CONFIG.height / 2, JETPACK_CONFIG.width, JETPACK_CONFIG.height);
+    context.drawImage(look.image, -JETPACK_CONFIG.width / 2, -look.height / 2, JETPACK_CONFIG.width, look.height);
     context.restore();
   });
 }
@@ -702,8 +827,9 @@ function drawWornJetpack() {
   // Strapped to the left of the sprite so it shows past the character's body.
   const x = player.x - 10;
   const y = player.y + 12;
-  drawJetpackFlame(x, y + JETPACK_CONFIG.height - 2);
-  if (isJetpackSpriteReady()) context.drawImage(jetpackSprite, x, y, JETPACK_CONFIG.width, JETPACK_CONFIG.height);
+  const look = getJetpackLook();
+  drawJetpackFlame(x, y + look.height - 2, look.nozzles);
+  if (isImageReady(look.image)) context.drawImage(look.image, x, y, JETPACK_CONFIG.width, look.height);
 }
 
 function startGame() {
@@ -782,8 +908,9 @@ function update(delta) {
     const shift = game.height * .45 - player.y;
     player.y = game.height * .45;
     game.cameraY += shift;
-    game.score += shift * .3;
     game.altitude += shift * .22;
+    // The score is the altitude reached, in metres.
+    game.score = game.altitude;
     game.platforms.forEach(platform => { platform.y += shift; if (platform.type === PLATFORM_TYPES.MOVING_VERTICAL) platform.baseY += shift; });
     game.monsters.forEach(monster => { monster.y += shift; monster.baseY += shift; });
     game.projectiles.forEach(projectile => { projectile.y += shift; });
@@ -793,13 +920,14 @@ function update(delta) {
   generatePlatforms();
   game.particles.forEach(particle => { particle.x += particle.vx * delta; particle.y += particle.vy * delta; particle.life -= delta; particle.vy += 80 * delta; }); game.particles = game.particles.filter(particle => particle.life > 0);
   player.rotation += player.dead ? delta * 5 : player.velocityX * delta * .002;
+  updateSeason(delta);
   if (player.y > game.height + 120) endGame();
   updateHud();
 }
 function updateHud() { document.getElementById('score').textContent = String(Math.floor(game.score)).padStart(5, '0'); document.getElementById('altitude').textContent = Math.floor(game.altitude); document.getElementById('altitudeBar').style.transform = `scaleX(${Math.min(game.altitude / 900, 1)})`; }
 function burst(x, y, type) { const color = type === 'monster' ? '#ff00ff' : type === PLATFORM_TYPES.DISAPPEARING || type === PLATFORM_TYPES.TRAMPOLINE ? '#00ffff' : '#8cff3a'; for (let index = 0; index < 8; index += 1) game.particles.push({ x, y, vx: (Math.random() - .5) * 150, vy: (Math.random() - .8) * 180, life: .3 + Math.random() * .35, color, size: 2 + Math.random() * 3 }); }
 
-function draw() { context.clearRect(0, 0, game.width, game.height); drawBackground(); game.platforms.forEach(drawPlatform); drawItems(); game.monsters.forEach(drawMonster); game.projectiles.forEach(drawProjectile); game.particles.forEach(drawParticle); drawShield(); drawWornJetpack(); drawPlayer(); drawMuzzleFlash(); }
+function draw() { context.clearRect(0, 0, game.width, game.height); drawBackground(); game.platforms.forEach(drawPlatform); drawItems(); game.monsters.forEach(drawMonster); game.projectiles.forEach(drawProjectile); game.particles.forEach(drawParticle); drawShield(); drawWornJetpack(); drawPlayer(); drawMuzzleFlash(); drawSeasonTransition(); }
 function drawMuzzleFlash() {
   const player = game.player;
   if (!player.shootTimer) return;
@@ -813,7 +941,69 @@ function drawMuzzleFlash() {
   context.fill();
   context.restore();
 }
+// 0 = space, 1 = pyramids; eases across the first part of the season transition.
+function getPyramidBlend() {
+  const transition = game.seasonTransition;
+  if (!transition) return isPyramidSeason() ? 1 : 0;
+  const progress = Math.min(1, transition.time / (SEASON_TRANSITION.duration * .6));
+  return progress * progress * (3 - 2 * progress);
+}
 function drawBackground() {
+  const blend = getPyramidBlend();
+  if (blend < 1) drawSpaceBackground();
+  if (blend > 0) { context.save(); context.globalAlpha = blend; drawPyramidBackground(); context.restore(); }
+}
+// The desert scene is static, so it is painted once per canvas size and reused.
+let pyramidBackdrop = null;
+function getPyramidBackdrop() {
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  if (pyramidBackdrop && pyramidBackdrop.logicalWidth === game.width && pyramidBackdrop.logicalHeight === game.height) return pyramidBackdrop;
+  const backdrop = document.createElement('canvas');
+  backdrop.width = Math.ceil(game.width * ratio); backdrop.height = Math.ceil(game.height * ratio);
+  backdrop.logicalWidth = game.width; backdrop.logicalHeight = game.height;
+  const draw = backdrop.getContext('2d'); draw.scale(ratio, ratio);
+  const w = game.width, h = game.height, horizon = h * .7;
+  const sky = draw.createLinearGradient(0, 0, 0, horizon);
+  sky.addColorStop(0, '#2d2160'); sky.addColorStop(.45, '#7a4f93'); sky.addColorStop(.8, '#d98f72'); sky.addColorStop(1, '#f4c27f');
+  draw.fillStyle = sky; draw.fillRect(0, 0, w, h);
+  const sunX = w * .6, sunY = horizon - h * .08;
+  const glow = draw.createRadialGradient(sunX, sunY, 0, sunX, sunY, w * .55);
+  glow.addColorStop(0, 'rgba(255,236,170,.85)'); glow.addColorStop(.18, 'rgba(255,196,120,.45)'); glow.addColorStop(1, 'rgba(255,160,110,0)');
+  draw.fillStyle = glow; draw.fillRect(0, 0, w, h);
+  draw.fillStyle = '#fff1c4'; draw.beginPath(); draw.arc(sunX, sunY, w * .07, 0, Math.PI * 2); draw.fill();
+  draw.fillStyle = 'rgba(92,60,120,.35)';
+  [[.2, .2, .34], [.75, .3, .28], [.45, .12, .22]].forEach(([cx, cy, span]) => { draw.beginPath(); draw.ellipse(w * cx, h * cy, w * span, h * .018, 0, 0, Math.PI * 2); draw.fill(); });
+  const pyramid = (cx, base, size, light, shade) => {
+    draw.fillStyle = light; draw.beginPath(); draw.moveTo(cx - size, base); draw.lineTo(cx, base - size * .95); draw.lineTo(cx + size * .15, base); draw.closePath(); draw.fill();
+    draw.fillStyle = shade; draw.beginPath(); draw.moveTo(cx + size * .15, base); draw.lineTo(cx, base - size * .95); draw.lineTo(cx + size, base); draw.closePath(); draw.fill();
+    draw.strokeStyle = 'rgba(60,30,40,.18)'; draw.lineWidth = 1;
+    for (let step = 1; step < 7; step += 1) { const y = base - size * .95 * step / 7; const half = size * (1 - step / 7); draw.beginPath(); draw.moveTo(cx - half, y); draw.lineTo(cx + half, y); draw.stroke(); }
+  };
+  pyramid(w * .18, horizon + 4, w * .2, '#b98a8e', '#8e6679');
+  pyramid(w * .82, horizon + 6, w * .16, '#b98a8e', '#8e6679');
+  pyramid(w * .5, horizon + 10, w * .3, '#e0ad6c', '#b27a48');
+  const dune = (top, color, amplitude, phase) => {
+    draw.fillStyle = color; draw.beginPath(); draw.moveTo(0, h);
+    for (let x = 0; x <= w; x += 8) draw.lineTo(x, top + Math.sin(x / w * Math.PI * 2 + phase) * amplitude);
+    draw.lineTo(w, h); draw.closePath(); draw.fill();
+  };
+  dune(horizon + 8, '#e7ba74', h * .012, .4);
+  dune(horizon + h * .07, '#d6a462', h * .02, 2.1);
+  dune(horizon + h * .15, '#c08c50', h * .025, 4.2);
+  draw.strokeStyle = 'rgba(110,70,35,.28)'; draw.lineWidth = 1.2;
+  for (let row = 0; row < 3; row += 1) {
+    const y = h * (.9 + row * .035);
+    for (let x = 10 + row * 7; x < w; x += 22) { draw.beginPath(); draw.moveTo(x, y); draw.lineTo(x + 8, y); draw.moveTo(x + 4, y - 4); draw.lineTo(x + 4, y + 4); draw.stroke(); }
+  }
+  pyramidBackdrop = backdrop;
+  return backdrop;
+}
+function drawPyramidBackground() {
+  context.drawImage(getPyramidBackdrop(), 0, 0, game.width, game.height);
+  // drifting sand motes scroll with the climb like the stars do in space
+  game.stars.forEach(star => { const y = (star.y + game.cameraY * .08) % game.height; context.fillStyle = star.size > 1 ? 'rgba(255,230,170,.8)' : 'rgba(255,248,225,.55)'; context.fillRect(star.x, y, star.size + .5, star.size + .5); });
+}
+function drawSpaceBackground() {
   const gradient = context.createLinearGradient(0, 0, 0, game.height); gradient.addColorStop(0, '#0b0636'); gradient.addColorStop(1, '#00001a'); context.fillStyle = gradient; context.fillRect(0, 0, game.width, game.height);
   const nebulas = [[.85, .22, 'rgba(140,255,58,.13)', 'rgba(0,0,255,.1)'], [.1, .85, 'rgba(255,0,255,.2)', 'rgba(255,140,0,.08)']];
   nebulas.forEach(([x, y, inner, outer]) => { const glow = context.createRadialGradient(game.width * x, game.height * y, 0, game.width * x, game.height * y, game.width * .75); glow.addColorStop(0, inner); glow.addColorStop(.5, outer); glow.addColorStop(1, 'rgba(0,0,26,0)'); context.fillStyle = glow; context.fillRect(0, 0, game.width, game.height); });
@@ -821,6 +1011,18 @@ function drawBackground() {
 }
 function drawPlatform(platform) {
   const { x, y, width } = platform;
+  const pyramidSprite = isPyramidSeason() ? pyramidSprites.platforms[platform.type === 'base' ? PLATFORM_TYPES.NORMAL : platform.type] : null;
+  if (isImageReady(pyramidSprite)) {
+    context.save();
+    context.globalAlpha = platform.active ? (platform.breakTimer > 0 ? .45 + Math.abs(Math.sin(platform.breakTimer * 22)) * .55 : 1) : .35;
+    // sand-coloured art needs a soft dark halo to stand out against the dunes
+    context.shadowColor = 'rgba(70,30,10,.55)';
+    context.shadowBlur = 6;
+    context.shadowOffsetY = 2;
+    context.drawImage(pyramidSprite, x, y - 2, width, width * pyramidSprite.naturalHeight / pyramidSprite.naturalWidth * PYRAMID_SEASON.platformSquash);
+    context.restore();
+    return;
+  }
   const specialSprite = platform.type !== PLATFORM_TYPES.NORMAL && platform.type !== 'base' ? specialPlatformSprites[platform.type] : null;
   if (specialSprite) {
     const scale = width / specialSprite.naturalWidth;
@@ -878,7 +1080,7 @@ function drawPlatform(platform) {
   }
   context.restore();
 }
-function drawPlayer() { const player = game.player; const squash = player.squashTimer > 0 ? player.squashTimer / .16 : 0; const scaleX = 1 + squash * .13; const scaleY = 1 - squash * .2; context.save(); context.translate(player.x + player.width / 2, player.y + player.height); context.rotate(player.rotation); context.scale(scaleX, scaleY); context.fillStyle = 'rgba(0,0,0,.3)'; context.beginPath(); context.ellipse(0, 0, 13, 2.5, 0, 0, Math.PI * 2); context.fill(); if (playerSprite) { context.drawImage(playerSprite, -16, -PLAYER_SPRITE_FEET, 32, 36); } else { context.translate(0, -player.height / 2); context.fillStyle = '#d8f546'; context.beginPath(); context.ellipse(0, -2, 16, 18, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#10141d'; context.beginPath(); context.ellipse(0, 1, 13, 10, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#f1eee5'; context.beginPath(); context.arc(-5, -1, 2.5, 0, Math.PI * 2); context.arc(5, -1, 2.5, 0, Math.PI * 2); context.fill(); } context.restore(); }
+function drawPlayer() { const player = game.player; const squash = player.squashTimer > 0 ? player.squashTimer / .16 : 0; const scaleX = 1 + squash * .13; const scaleY = 1 - squash * .2; context.save(); context.translate(player.x + player.width / 2, player.y + player.height); context.rotate(player.rotation); context.scale(scaleX, scaleY); context.fillStyle = 'rgba(0,0,0,.3)'; context.beginPath(); context.ellipse(0, 0, 13, 2.5, 0, 0, Math.PI * 2); context.fill(); const pyramidPlayer = isPyramidSeason() && isImageReady(pyramidSprites.player) ? pyramidSprites.player : null; if (pyramidPlayer) { const height = PYRAMID_SEASON.player.height; const width = height * pyramidPlayer.naturalWidth / pyramidPlayer.naturalHeight; context.drawImage(pyramidPlayer, -width / 2, -height + 1, width, height); } else if (playerSprite) { context.drawImage(playerSprite, -16, -PLAYER_SPRITE_FEET, 32, 36); } else { context.translate(0, -player.height / 2); context.fillStyle = '#d8f546'; context.beginPath(); context.ellipse(0, -2, 16, 18, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#10141d'; context.beginPath(); context.ellipse(0, 1, 13, 10, 0, 0, Math.PI * 2); context.fill(); context.fillStyle = '#f1eee5'; context.beginPath(); context.arc(-5, -1, 2.5, 0, Math.PI * 2); context.arc(5, -1, 2.5, 0, Math.PI * 2); context.fill(); } context.restore(); }
 function drawParticle(particle) { context.globalAlpha = Math.max(0, particle.life * 2); context.fillStyle = particle.color; context.fillRect(particle.x, particle.y, particle.size, particle.size); context.globalAlpha = 1; }
 
 function playTone(frequency, duration) { if (!game.audio) game.audio = new (window.AudioContext || window.webkitAudioContext)(); const oscillator = game.audio.createOscillator(); const gain = game.audio.createGain(); oscillator.frequency.value = frequency; oscillator.type = 'square'; gain.gain.setValueAtTime(.025, game.audio.currentTime); gain.gain.exponentialRampToValueAtTime(.001, game.audio.currentTime + duration); oscillator.connect(gain); gain.connect(game.audio.destination); oscillator.start(); oscillator.stop(game.audio.currentTime + duration); }
