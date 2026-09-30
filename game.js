@@ -1579,6 +1579,9 @@ function drawParticle(particle) { context.globalAlpha = Math.max(0, particle.lif
 
 function playTone(frequency, duration) { if (!game.audio) game.audio = new (window.AudioContext || window.webkitAudioContext)(); const oscillator = game.audio.createOscillator(); const gain = game.audio.createGain(); oscillator.frequency.value = frequency; oscillator.type = 'square'; gain.gain.setValueAtTime(.025, game.audio.currentTime); gain.gain.exponentialRampToValueAtTime(.001, game.audio.currentTime + duration); oscillator.connect(gain); gain.connect(game.audio.destination); oscillator.start(); oscillator.stop(game.audio.currentTime + duration); }
 document.getElementById('startButton').addEventListener('click', startGame); document.getElementById('restartButton').addEventListener('click', startGame); document.getElementById('pauseButton').addEventListener('click', togglePause);
+// The pause overlay covers the HUD's pause button, so a tap anywhere on it resumes (the only way back without a keyboard).
+pauseScreen.addEventListener('click', () => { if (game.paused) togglePause(); });
+if (matchMedia('(pointer: coarse)').matches) pauseScreen.querySelector('small').textContent = 'Touche l’écran pour reprendre';
 // Mobile toolbars showing/hiding and rotations resize the canvas mid-game; keep its bitmap in step so nothing stretches.
 window.addEventListener('resize', () => { resizeCanvas(); if (game.player && (game.paused || !game.running)) draw(); });
 function syncControls() {

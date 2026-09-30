@@ -124,7 +124,7 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 5px; border: 1px soli
 .over-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
 .ghost-button { border-color: var(--line); background: transparent; box-shadow: none; text-shadow: none; color: var(--muted); }
 .leaderboard-mini { display: none; width: min(300px, 100%); margin-bottom: 14px; text-align: left; }
-.pause-screen { background: rgba(0, 0, 26, .8); }
+.pause-screen { background: rgba(0, 0, 26, .8); cursor: pointer; }
 .modal { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 26, .78); backdrop-filter: blur(4px); }
 .modal[hidden] { display: none; }
 .modal-card { width: min(460px, 100%); max-height: min(720px, calc(100vh - 32px)); max-height: min(720px, calc(100dvh - 32px)); display: flex; flex-direction: column; padding: 22px; background: #07052a; border: 2px solid var(--pink); border-radius: 18px; box-shadow: 0 0 18px var(--pink-glow), 0 0 50px rgba(0, 255, 255, .15); }
